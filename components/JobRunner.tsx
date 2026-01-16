@@ -41,6 +41,7 @@ export default function JobRunner() {
   const [role, setRole] = useState("Striker");
   const [category, setCategory] = useState("U17");
   const [shirtNumber, setShirtNumber] = useState<number>(9);
+  const [teamName, setTeamName] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
   const [targetSelection, setTargetSelection] = useState<TargetSelection | null>(
@@ -167,6 +168,10 @@ export default function JobRunner() {
       setError("Video URL is required.");
       return;
     }
+    if (!teamName.trim()) {
+      setError("Team name is required.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -174,7 +179,8 @@ export default function JobRunner() {
         video_url: videoUrl.trim(),
         role,
         category,
-        shirt_number: Number(shirtNumber)
+        shirt_number: Number(shirtNumber),
+        team_name: teamName.trim()
       });
       setJobId(response.job_id);
       setJob({ job_id: response.job_id, status: response.status });
@@ -344,6 +350,7 @@ export default function JobRunner() {
     setRole("Striker");
     setCategory("U17");
     setShirtNumber(9);
+    setTeamName("");
     setJobId(null);
     setJob(null);
     setTargetSelection(null);
@@ -405,6 +412,16 @@ export default function JobRunner() {
               value={category}
               onChange={(event) => setCategory(event.target.value)}
               className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+            />
+          </label>
+
+          <label className="block text-sm text-slate-300">
+            Team name
+            <input
+              value={teamName}
+              onChange={(event) => setTeamName(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              required
             />
           </label>
 
