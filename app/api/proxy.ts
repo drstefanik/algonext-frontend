@@ -3,44 +3,61 @@ type ForwardOptions = {
   includeBody?: boolean;
 };
 
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailers",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+]);
+
 export async function forward(
   request: Request,
   targetUrl: string,
   { methodOverride, includeBody = true }: ForwardOptions = {}
 ) {
   try {
+    // Forward headers (quasi tutti), esclusi hop-by-hop
     const headers = new Headers();
-    const reqContentType = request.headers.get("content-type");
-    if (reqContentType) {
-      headers.set("content-type", reqContentType);
-    }
+    request.headers.forEach((value, key) => {
+      const k = key.toLowerCase();
+      if (!HOP_BY_H_HOP.has(k)) headers.set(key, value);
+    });
 
+    // Body (solo se previsto)
     const body = includeBody ? await request.text() : undefined;
+
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: body && includeBody ? body : undefined
+      body: body && includeBody ? body : undefined,
     });
 
-    const responseBody = await upstreamResponse.text();
     const upstreamContentType =
-      upstreamResponse.headers.get("content-type") ?? "text/plain";
+      upstreamResponse.headers.get("content-type") ?? "text/plain; charset=utf-8";
+
+    const responseBody = await upstreamResponse.text();
 
     return new Response(responseBody, {
       status: upstreamResponse.status,
       headers: {
         "content-type": upstreamContentType,
-        "cache-control": "no-store"
-      }
+        "cache-control": "no-store",
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: `Proxy error: ${message}` }), {
+    return new Response(JSON.stringify({ ok: false, error: `Proxy error: ${message}` }), {
       status: 502,
       headers: {
-        "content-type": "application/json",
-        "cache-control": "no-store"
-      }
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      },
     });
   }
 }
