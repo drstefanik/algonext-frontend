@@ -29,13 +29,10 @@ export async function forward(
       if (!HOP_BY_HOP.has(k)) headers.set(key, value);
     });
 
-    // Body (solo se previsto)
-    const body = includeBody ? await request.text() : undefined;
-
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: body && includeBody ? body : undefined,
+      body: includeBody ? request.body : undefined,
     });
 
     const upstreamContentType =
