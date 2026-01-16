@@ -11,6 +11,7 @@ export type JobStatus =
   | "COMPLETED"
   | "FAILED"
   | "WAITING_FOR_SELECTION"
+  | "WAITING_FOR_PLAYER"
   | string;
 
 export type JobProgress = {
@@ -19,22 +20,44 @@ export type JobProgress = {
   message?: string;
 };
 
+export type JobResultSummary = {
+  player_role?: string;
+  overall_score?: number;
+};
+
+export type JobAssetVideo = {
+  s3_key?: string;
+  signed_url?: string;
+  expires_in?: number;
+};
+
+export type JobClip = {
+  index?: number;
+  start?: number;
+  end?: number;
+  s3_key?: string;
+  signed_url?: string;
+  expires_in?: number;
+};
+
+export type PreviewFrame = {
+  time_sec: number;
+  key: string;
+  signed_url: string;
+  width?: number | null;
+  height?: number | null;
+};
+
 export type JobResult = {
-  summary?: {
-    overall_score?: number;
-    player_role?: string;
-    radar?: Record<string, number>;
-  };
+  schema_version?: string;
+  summary?: JobResultSummary;
+  radar?: Record<string, number>;
   assets?: {
-    input_video?: { signed_url?: string };
-    clips?: Array<{
-      start?: number;
-      end?: number;
-      signed_url?: string;
-    }>;
+    input_video?: JobAssetVideo;
   };
-  preview_frames?: JobFrame[];
-  player_ref?: FrameSelection;
+  clips?: JobClip[];
+  preview_frames?: PreviewFrame[];
+  [key: string]: any;
 };
 
 export type JobResponse = {

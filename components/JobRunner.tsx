@@ -10,7 +10,8 @@ import {
   saveJobPlayerRef,
   type FrameSelection,
   type JobFrame,
-  type JobResponse
+  type JobResponse,
+  type PreviewFrame
 } from "@/lib/api";
 import FrameBoxSelector from "@/components/FrameBoxSelector";
 import ProgressBar from "@/components/ProgressBar";
@@ -21,6 +22,7 @@ const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const statusStyles: Record<string, string> = {
   QUEUED: "bg-slate-800 text-slate-200",
   WAITING_FOR_SELECTION: "bg-amber-500/20 text-amber-200",
+  WAITING_FOR_PLAYER: "bg-amber-500/20 text-amber-200",
   RUNNING: "bg-blue-500/20 text-blue-200",
   COMPLETED: "bg-emerald-500/20 text-emerald-200",
   FAILED: "bg-rose-500/20 text-rose-200"
@@ -50,7 +52,7 @@ export default function JobRunner() {
   const [loadingFrames, setLoadingFrames] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
-  const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<JobFrame | null>(
+  const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
     null
   );
   const [playerRefSelection, setPlayerRefSelection] = useState<FrameSelection | null>(
@@ -62,8 +64,15 @@ export default function JobRunner() {
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
-  const displayStatus =
-    job?.status === "COMPLETED" ? "COMPLETED" : job?.status ?? "WAITING";
+  const displayStatus = job?.status ?? "WAITING";
+  const displayStatusLabelMap: Record<string, string> = {
+    WAITING_FOR_PLAYER: "Select player",
+    WAITING_FOR_SELECTION: "Select player",
+    RUNNING: "running",
+    COMPLETED: "completed"
+  };
+  const displayStatusLabel =
+    displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
 
   const statusClass = useMemo(() => {
     if (!displayStatus) {
@@ -75,6 +84,8 @@ export default function JobRunner() {
   const previewFrames = job?.result?.preview_frames ?? [];
   const playerRef = job?.player_ref ?? job?.result?.player_ref ?? null;
   const shouldSelectPlayer = previewFrames.length > 0 && !playerRef;
+  const isWaitingForPlayer =
+    job?.status === "WAITING_FOR_PLAYER" || job?.status === "WAITING_FOR_SELECTION";
 
   const activePreviewRect = previewDragState
     ? {
@@ -241,7 +252,7 @@ export default function JobRunner() {
     }
   };
 
-  const handleOpenPreview = (frame: JobFrame) => {
+  const handleOpenPreview = (frame: PreviewFrame) => {
     setSelectedPreviewFrame(frame);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
@@ -310,7 +321,7 @@ export default function JobRunner() {
 
     if (width > 1 && height > 1) {
       setPlayerRefSelection({
-        t: selectedPreviewFrame.t,
+        t: selectedPreviewFrame.time_sec,
         x: left / image.clientWidth,
         y: top / image.clientHeight,
         w: width / image.clientWidth,
@@ -497,19 +508,19 @@ export default function JobRunner() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {previewFrames.map((frame, index) => (
                   <button
-                    key={`${frame.t}-${index}`}
+                    key={`${frame.key}-${index}`}
                     type="button"
                     onClick={() => handleOpenPreview(frame)}
                     className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
                   >
                     <img
-                      src={frame.url}
-                      alt={`Preview frame at ${frame.t.toFixed(2)}s`}
+                      src={frame.signed_url}
+                      alt={`Preview frame at ${frame.time_sec.toFixed(2)}s`}
                       className="h-32 w-full object-cover"
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                        t={frame.t.toFixed(2)}s
+                        t={frame.time_sec.toFixed(2)}s
                       </p>
                     </div>
                   </button>
@@ -542,12 +553,17 @@ export default function JobRunner() {
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${statusClass}`}
           >
-            {displayStatus}
+            {displayStatusLabel}
           </span>
         </div>
 
         <div className="mt-6 space-y-4">
           <ProgressBar pct={pct} />
+          {isWaitingForPlayer ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
+              Select player now
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
@@ -690,8 +706,8 @@ export default function JobRunner() {
             >
               <img
                 ref={previewImageRef}
-                src={selectedPreviewFrame.url}
-                alt={`Preview frame at ${selectedPreviewFrame.t.toFixed(2)}s`}
+                src={selectedPreviewFrame.signed_url}
+                alt={`Preview frame at ${selectedPreviewFrame.time_sec.toFixed(2)}s`}
                 className="h-auto w-full select-none"
                 draggable={false}
               />
