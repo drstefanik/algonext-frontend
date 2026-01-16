@@ -8,9 +8,9 @@ This is a Next.js (App Router) frontend for creating, enqueueing, and monitoring
    ```bash
    npm install
    ```
-2. Create a `.env.local` file with the backend API origin:
+2. Create a `.env.local` file with the backend API base URL:
    ```bash
-   API_ORIGIN=http://46.224.249.136:8000
+   API_BASE_URL=http://46.224.249.136:8000
    ```
 3. Run the dev server:
    ```bash
@@ -21,11 +21,11 @@ This is a Next.js (App Router) frontend for creating, enqueueing, and monitoring
 ## Environment variables
 | Name | Required | Description |
 | --- | --- | --- |
-| `API_ORIGIN` | ✅ | Origin for the AlgoNext backend API (e.g. `https://YOUR_API_DOMAIN` or `http://46.224.249.136:8000`). |
+| `API_BASE_URL` | ✅ | Base URL for the AlgoNext backend API (e.g. `https://YOUR_API_DOMAIN` or `http://46.224.249.136:8000`). |
 
 ## Deploy to Vercel
 1. Import this repository into Vercel.
-2. Add the environment variable `API_ORIGIN` (non-public) in the Vercel project settings.
+2. Add the environment variable `API_BASE_URL` (non-public) in the Vercel project settings.
 3. Trigger a build & deploy.
 
 ## Verification checklist

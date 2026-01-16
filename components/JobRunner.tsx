@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createJob, enqueueJob, type JobResponse } from "@/lib/api";
+import {
+  createJob,
+  enqueueJob,
+  getJob,
+  getJobFrames,
+  saveJobSelection,
+  type FrameSelection,
+  type JobFrame,
+  type JobResponse
+} from "@/lib/api";
+import FrameBoxSelector from "@/components/FrameBoxSelector";
 import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 
@@ -9,6 +19,7 @@ const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 
 const statusStyles: Record<string, string> = {
   QUEUED: "bg-slate-800 text-slate-200",
+  WAITING_FOR_SELECTION: "bg-amber-500/20 text-amber-200",
   RUNNING: "bg-blue-500/20 text-blue-200",
   COMPLETED: "bg-emerald-500/20 text-emerald-200",
   FAILED: "bg-rose-500/20 text-rose-200"
@@ -21,9 +32,14 @@ export default function JobRunner() {
   const [shirtNumber, setShirtNumber] = useState<number>(9);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
+  const [frames, setFrames] = useState<JobFrame[]>([]);
+  const [selections, setSelections] = useState<FrameSelection[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingFrames, setLoadingFrames] = useState(false);
+  const [savingSelection, setSavingSelection] = useState(false);
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -66,6 +82,38 @@ export default function JobRunner() {
     };
   }, [jobId, polling]);
 
+  useEffect(() => {
+    if (!jobId || job?.status !== "WAITING_FOR_SELECTION") {
+      return;
+    }
+
+    let isMounted = true;
+    const fetchFrames = async () => {
+      setLoadingFrames(true);
+      setSelectionError(null);
+      try {
+        const data = await getJobFrames(jobId, 8);
+        if (isMounted) {
+          setFrames(data.frames ?? []);
+        }
+      } catch (frameError) {
+        if (isMounted) {
+          setSelectionError((frameError as Error).message);
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingFrames(false);
+        }
+      }
+    };
+
+    fetchFrames();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [jobId, job?.status]);
+
   const handleCreateJob = async () => {
     setError(null);
     if (!videoUrl.trim()) {
@@ -83,6 +131,8 @@ export default function JobRunner() {
       });
       setJobId(response.job_id);
       setJob({ job_id: response.job_id, status: response.status });
+      setFrames([]);
+      setSelections([]);
     } catch (createError) {
       setError((createError as Error).message);
     } finally {
@@ -107,6 +157,29 @@ export default function JobRunner() {
     }
   };
 
+  const handleSaveSelection = async () => {
+    if (!jobId) {
+      return;
+    }
+    setSelectionError(null);
+    setSavingSelection(true);
+    try {
+      await saveJobSelection(jobId, {
+        selections,
+        player: {
+          shirt_number: Number(shirtNumber),
+          team_name: category
+        }
+      });
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+    } catch (saveError) {
+      setSelectionError((saveError as Error).message);
+    } finally {
+      setSavingSelection(false);
+    }
+  };
+
   const handleStopPolling = () => {
     setPolling(false);
   };
@@ -118,8 +191,13 @@ export default function JobRunner() {
     setShirtNumber(9);
     setJobId(null);
     setJob(null);
+    setFrames([]);
+    setSelections([]);
     setError(null);
+    setSelectionError(null);
     setPolling(false);
+    setLoadingFrames(false);
+    setSavingSelection(false);
   };
 
   return (
@@ -210,11 +288,20 @@ export default function JobRunner() {
             <button
               type="button"
               onClick={handleEnqueue}
-              disabled={submitting}
+              disabled={
+                submitting ||
+                (job?.status === "WAITING_FOR_SELECTION" &&
+                  selections.length < 2)
+              }
               className="mt-3 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? "Enqueueing..." : "Enqueue"}
             </button>
+            {job?.status === "WAITING_FOR_SELECTION" ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Add at least 2 boxes to unlock enqueue.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -298,6 +385,58 @@ export default function JobRunner() {
             </button>
           </div>
         </div>
+
+        {job?.status === "WAITING_FOR_SELECTION" ? (
+          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+            <div className="flex flex-col gap-2">
+              <h3 className="text-lg font-semibold text-white">
+                Select player (2–5 boxes)
+              </h3>
+              <p className="text-sm text-slate-400">
+                Draw bounding boxes on the frames to identify the player
+                before enqueueing processing.
+              </p>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {loadingFrames ? (
+                <p className="text-sm text-slate-400">Loading frames…</p>
+              ) : frames.length === 0 ? (
+                <p className="text-sm text-slate-400">
+                  No frames available yet. Try again shortly.
+                </p>
+              ) : (
+                <FrameBoxSelector
+                  frames={frames}
+                  selections={selections}
+                  onSelectionsChange={setSelections}
+                />
+              )}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveSelection}
+                  disabled={savingSelection || selections.length < 2}
+                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingSelection ? "Saving..." : "Save selection"}
+                </button>
+                <span className="text-xs text-slate-500">
+                  {selections.length < 2
+                    ? "Select at least 2 boxes to continue."
+                    : "Ready to save selections."}
+                </span>
+              </div>
+            </div>
+
+            {selectionError ? (
+              <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                {selectionError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {job && job.status === "COMPLETED" ? <ResultView job={job} /> : null}
       </section>

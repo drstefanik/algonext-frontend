@@ -1,4 +1,4 @@
-import { forward } from "../../proxy";
+import { forward } from "../../../proxy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,20 +25,15 @@ async function proxyRequest(request: Request, targetUrl: string) {
     );
   }
 
-  const response = await forward(request, targetUrl, { includeBody: false });
-  const headers = new Headers(response.headers);
-  headers.set("cache-control", "no-cache, no-store, must-revalidate");
-  headers.set("pragma", "no-cache");
-  headers.set("expires", "0");
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
-  });
+  return forward(request, targetUrl, { includeBody: false });
 }
 
 export async function GET(request: Request, context: RouteContext) {
   const { jobId } = context.params;
-  return proxyRequest(request, `${API_BASE_URL}/jobs/${jobId}`);
+  const { searchParams } = new URL(request.url);
+  const count = searchParams.get("count") ?? "8";
+  return proxyRequest(
+    request,
+    `${API_BASE_URL}/jobs/${jobId}/frames?count=${count}`
+  );
 }

@@ -5,7 +5,13 @@ export type CreateJobPayload = {
   shirt_number: number;
 };
 
-export type JobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | string;
+export type JobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "WAITING_FOR_SELECTION"
+  | string;
 
 export type JobProgress = {
   pct?: number;
@@ -37,6 +43,21 @@ export type JobResponse = {
   error?: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type JobFrame = {
+  t: number;
+  url: string;
+  w: number;
+  h: number;
+};
+
+export type FrameSelection = {
+  t: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 };
 
 const jsonHeaders = {
@@ -113,4 +134,42 @@ export async function getJob(jobId: string) {
 
 export async function getJobStatus(jobId: string) {
   return getJob(jobId);
+}
+
+export async function getJobFrames(jobId: string, count = 8) {
+  const response = await fetch(`/api/jobs/${jobId}/frames?count=${count}`, {
+    method: "GET",
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return (await response.json()) as { frames: JobFrame[] };
+}
+
+export async function saveJobSelection(
+  jobId: string,
+  payload: {
+    selections: FrameSelection[];
+    player: {
+      shirt_number: number;
+      team_name: string;
+      player_name?: string;
+    };
+  }
+) {
+  const response = await fetch(`/api/jobs/${jobId}/selection`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return response;
 }
