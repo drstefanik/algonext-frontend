@@ -21,6 +21,7 @@ const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const statusStyles: Record<string, string> = {
   QUEUED: "bg-slate-800 text-slate-200",
   WAITING_FOR_SELECTION: "bg-amber-500/20 text-amber-200",
+  WAITING_FOR_PLAYER: "bg-amber-500/20 text-amber-200",
   RUNNING: "bg-blue-500/20 text-blue-200",
   COMPLETED: "bg-emerald-500/20 text-emerald-200",
   FAILED: "bg-rose-500/20 text-rose-200"
@@ -62,8 +63,15 @@ export default function JobRunner() {
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
-  const displayStatus =
-    job?.status === "COMPLETED" ? "COMPLETED" : job?.status ?? "WAITING";
+  const displayStatus = job?.status ?? "WAITING";
+  const displayStatusLabelMap: Record<string, string> = {
+    WAITING_FOR_PLAYER: "Select player",
+    WAITING_FOR_SELECTION: "Select player",
+    RUNNING: "running",
+    COMPLETED: "completed"
+  };
+  const displayStatusLabel =
+    displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
 
   const statusClass = useMemo(() => {
     if (!displayStatus) {
@@ -75,6 +83,8 @@ export default function JobRunner() {
   const previewFrames = job?.result?.preview_frames ?? [];
   const playerRef = job?.player_ref ?? job?.result?.player_ref ?? null;
   const shouldSelectPlayer = previewFrames.length > 0 && !playerRef;
+  const isWaitingForPlayer =
+    job?.status === "WAITING_FOR_PLAYER" || job?.status === "WAITING_FOR_SELECTION";
 
   const activePreviewRect = previewDragState
     ? {
@@ -542,12 +552,17 @@ export default function JobRunner() {
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${statusClass}`}
           >
-            {displayStatus}
+            {displayStatusLabel}
           </span>
         </div>
 
         <div className="mt-6 space-y-4">
           <ProgressBar pct={pct} />
+          {isWaitingForPlayer ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
+              Select player now
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">

@@ -9,10 +9,10 @@ const formatScore = (value?: number) => {
 
 export default function ResultView({ job }: { job: JobResponse }) {
   const summary = job.result?.summary;
-  const radarEntries = summary?.radar
-    ? Object.entries(summary.radar)
+  const radarEntries = job.result?.radar
+    ? Object.entries(job.result.radar)
     : [];
-  const clips = job.result?.assets?.clips ?? [];
+  const clips = job.result?.clips ?? [];
 
   return (
     <div className="mt-6 space-y-6">
