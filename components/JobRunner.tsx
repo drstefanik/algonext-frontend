@@ -1,13 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  createJob,
-  enqueueJob,
-  getJob,
-  type JobResponse,
-  type JobStatus
-} from "@/lib/api";
+import { createJob, enqueueJob, type JobResponse } from "@/lib/api";
 import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 
@@ -20,9 +14,6 @@ const statusStyles: Record<string, string> = {
   FAILED: "bg-rose-500/20 text-rose-200"
 };
 
-const isTerminalStatus = (status?: JobStatus) =>
-  status === "COMPLETED" || status === "FAILED";
-
 export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
@@ -30,52 +21,47 @@ export default function JobRunner() {
   const [shirtNumber, setShirtNumber] = useState<number>(9);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
-  const [status, setStatus] = useState<JobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const statusLabel = status ?? job?.status ?? "—";
-  const progressPct = job?.progress?.pct ?? 0;
+  const pct = job?.progress?.pct ?? 0;
+  const step = job?.progress?.step ?? "—";
+  const displayStatus =
+    job?.status === "COMPLETED" ? "COMPLETED" : job?.status ?? "WAITING";
 
   const statusClass = useMemo(() => {
-    if (!statusLabel) {
+    if (!displayStatus) {
       return "bg-slate-800 text-slate-200";
     }
-    return statusStyles[statusLabel] ?? "bg-slate-800 text-slate-200";
-  }, [statusLabel]);
+    return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
+  }, [displayStatus]);
 
   useEffect(() => {
     if (!jobId || !polling) {
       return;
     }
 
-    let cancelled = false;
-    const tick = async () => {
+    const interval = setInterval(async () => {
       try {
-        const nextJob = await getJob(jobId);
-        if (cancelled) {
-          return;
-        }
-        setJob(nextJob);
-        setStatus(nextJob.status ?? null);
-        if (isTerminalStatus(nextJob.status)) {
+        const res = await fetch(`/api/jobs/${jobId}`, {
+          cache: "no-store"
+        });
+        const data = (await res.json()) as JobResponse;
+
+        setJob(data);
+
+        if (data.status === "COMPLETED" || data.status === "FAILED") {
+          clearInterval(interval);
           setPolling(false);
         }
       } catch (pollError) {
-        if (cancelled) {
-          return;
-        }
         setError((pollError as Error).message);
         setPolling(false);
       }
-    };
-
-    tick();
-    const interval = setInterval(tick, 2000);
+    }, 2000);
 
     return () => {
-      cancelled = true;
       clearInterval(interval);
     };
   }, [jobId, polling]);
@@ -96,7 +82,6 @@ export default function JobRunner() {
         shirt_number: Number(shirtNumber)
       });
       setJobId(response.job_id);
-      setStatus(response.status ?? null);
       setJob({ job_id: response.job_id, status: response.status });
     } catch (createError) {
       setError((createError as Error).message);
@@ -114,7 +99,6 @@ export default function JobRunner() {
     try {
       const response = await enqueueJob(jobId);
       setJob(response);
-      setStatus(response.status ?? status ?? null);
       setPolling(true);
     } catch (enqueueError) {
       setError((enqueueError as Error).message);
@@ -134,7 +118,6 @@ export default function JobRunner() {
     setShirtNumber(9);
     setJobId(null);
     setJob(null);
-    setStatus(null);
     setError(null);
     setPolling(false);
   };
@@ -253,19 +236,19 @@ export default function JobRunner() {
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${statusClass}`}
           >
-            {statusLabel}
+            {displayStatus}
           </span>
         </div>
 
         <div className="mt-6 space-y-4">
-          <ProgressBar pct={progressPct} />
+          <ProgressBar pct={pct} />
 
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
               Step
             </p>
             <p className="mt-2 text-sm text-slate-200">
-              {job?.progress?.step ?? "—"}
+              {step}
             </p>
             <p className="mt-2 text-xs text-slate-500">
               {job?.progress?.message ?? "No message"}
