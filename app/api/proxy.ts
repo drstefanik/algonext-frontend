@@ -30,7 +30,7 @@ export async function forward(
 
     // IMPORTANT: non usare request.body (stream) su Vercel.
     // Bufferizza il body: stabile per JSON piccoli.
-    const bodyText = includeBody ? await request.clone().text() : undefined;
+    const bodyText = await request.clone().text();
 
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
