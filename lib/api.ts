@@ -3,6 +3,7 @@ export type CreateJobPayload = {
   role: string;
   category: string;
   shirt_number: number;
+  team_name: string;
 };
 
 export type JobStatus =
@@ -139,6 +140,9 @@ export async function createJob(payload: CreateJobPayload) {
   });
 
   if (!response.ok) {
+    if (response.status === 422) {
+      throw new Error("Missing required fields: team name");
+    }
     await handleError(response);
   }
 
