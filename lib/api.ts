@@ -66,6 +66,7 @@ export type JobResponse = {
   progress?: JobProgress;
   result?: JobResult;
   player_ref?: FrameSelection;
+  target?: JobTarget;
   error?: string;
   created_at?: string;
   updated_at?: string;
@@ -84,6 +85,19 @@ export type FrameSelection = {
   y: number;
   w: number;
   h: number;
+};
+
+export type TargetSelection = {
+  frame_time_sec: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type JobTarget = {
+  selections?: TargetSelection[];
+  [key: string]: any;
 };
 
 const jsonHeaders = {
@@ -206,6 +220,38 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
     headers: jsonHeaders,
     cache: "no-store",
     body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return response;
+}
+
+export async function saveJobTargetSelection(
+  jobId: string,
+  payload: { selections: TargetSelection[] }
+) {
+  const response = await fetch(`/api/jobs/${jobId}/target`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return response;
+}
+
+export async function confirmJobSelection(jobId: string) {
+  const response = await fetch(`/api/jobs/${jobId}/confirm-selection`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store"
   });
 
   if (!response.ok) {
