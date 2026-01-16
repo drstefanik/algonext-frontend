@@ -63,7 +63,10 @@ export default function JobRunner() {
   );
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
+  const [refreshingFrames, setRefreshingFrames] = useState(false);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const playerSectionRef = useRef<HTMLElement | null>(null);
+  const targetSectionRef = useRef<HTMLDivElement | null>(null);
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -84,8 +87,8 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const previewFrames = job?.result?.preview_frames ?? [];
-  const playerRef = job?.player_ref ?? job?.result?.player_ref ?? null;
+  const previewFrames = job?.result?.previewFrames ?? [];
+  const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const shouldSelectPlayer = previewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
   const hasTargetSelection = Boolean(targetSelection ?? jobTargetSelection);
@@ -182,8 +185,8 @@ export default function JobRunner() {
         shirt_number: Number(shirtNumber),
         team_name: teamName.trim()
       });
-      setJobId(response.job_id);
-      setJob({ job_id: response.job_id, status: response.status });
+      setJobId(response.jobId);
+      setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
@@ -304,7 +307,7 @@ export default function JobRunner() {
     if (width > 1 && height > 1) {
       if (previewMode === "player-ref") {
         setPlayerRefSelection({
-          t: selectedPreviewFrame.time_sec,
+          t: selectedPreviewFrame.timeSec,
           x: left / image.clientWidth,
           y: top / image.clientHeight,
           w: width / image.clientWidth,
@@ -312,7 +315,7 @@ export default function JobRunner() {
         });
       } else {
         setTargetSelection({
-          frame_time_sec: selectedPreviewFrame.time_sec,
+          frameTimeSec: selectedPreviewFrame.timeSec,
           x: left / image.clientWidth,
           y: top / image.clientHeight,
           w: width / image.clientWidth,
@@ -343,6 +346,39 @@ export default function JobRunner() {
 
   const handleStopPolling = () => {
     setPolling(false);
+  };
+
+  const handleRefreshJob = async () => {
+    if (!jobId) {
+      return;
+    }
+    setRefreshingFrames(true);
+    setError(null);
+    try {
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+    } catch (refreshError) {
+      setError((refreshError as Error).message);
+    } finally {
+      setRefreshingFrames(false);
+    }
+  };
+
+  const handleFocusStep = () => {
+    if (isWaitingForTarget) {
+      targetSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+      return;
+    }
+
+    if (isWaitingForPlayer) {
+      playerSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
   };
 
   const handleReset = () => {
@@ -486,7 +522,10 @@ export default function JobRunner() {
         ) : null}
       </section>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+      <section
+        ref={playerSectionRef}
+        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
+      >
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-xl font-semibold text-white">Select Player</h2>
@@ -514,13 +553,13 @@ export default function JobRunner() {
                     className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
                   >
                     <img
-                      src={frame.signed_url}
-                      alt={`Preview frame at ${frame.time_sec.toFixed(2)}s`}
+                      src={frame.signedUrl}
+                      alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
                       className="h-32 w-full object-cover"
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                        t={frame.time_sec.toFixed(2)}s
+                        t={frame.timeSec.toFixed(2)}s
                       </p>
                     </div>
                   </button>
@@ -531,13 +570,28 @@ export default function JobRunner() {
               </p>
             </>
           ) : (
-            <p className="text-sm text-slate-400">
-              {playerRef
-                ? "Player reference already saved."
-                : jobId
-                ? "Preview frames are not available yet. Check again soon."
-                : "Create a job to load preview frames."}
-            </p>
+            <div className="space-y-3 text-sm text-slate-400">
+              {playerRef ? (
+                <p>Player reference already saved.</p>
+              ) : jobId ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                    <span>Preview frames are loading.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRefreshJob}
+                    disabled={refreshingFrames}
+                    className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {refreshingFrames ? "Refreshing..." : "Retry"}
+                  </button>
+                </>
+              ) : (
+                <p>Create a job to load preview frames.</p>
+              )}
+            </div>
           )}
         </div>
       </section>
@@ -560,9 +614,13 @@ export default function JobRunner() {
         <div className="mt-6 space-y-4">
           <ProgressBar pct={pct} />
           {isWaitingForPlayer || isWaitingForTarget ? (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
+            <button
+              type="button"
+              onClick={handleFocusStep}
+              className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60"
+            >
               {isWaitingForTarget ? "Select target now" : "Select player now"}
-            </div>
+            </button>
           ) : null}
 
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -583,7 +641,7 @@ export default function JobRunner() {
                 Created
               </p>
               <p className="mt-2 text-sm text-slate-200">
-                {job?.created_at ?? "—"}
+                {job?.createdAt ?? "—"}
               </p>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -591,7 +649,7 @@ export default function JobRunner() {
                 Updated
               </p>
               <p className="mt-2 text-sm text-slate-200">
-                {job?.updated_at ?? "—"}
+                {job?.updatedAt ?? "—"}
               </p>
             </div>
           </div>
@@ -622,7 +680,10 @@ export default function JobRunner() {
         </div>
 
         {job?.status === "WAITING_FOR_SELECTION" ? (
-          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+          <div
+            ref={targetSectionRef}
+            className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6"
+          >
             <div className="flex flex-col gap-2">
               <h3 className="text-lg font-semibold text-white">
                 Select target (1 box)
@@ -635,14 +696,25 @@ export default function JobRunner() {
 
             <div className="mt-4 space-y-4">
               {previewFrames.length === 0 ? (
-                <p className="text-sm text-slate-400">
-                  No frames available yet. Try again shortly.
-                </p>
+                <div className="space-y-3 text-sm text-slate-400">
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
+                    <span>No frames yet. Waiting for previews.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRefreshJob}
+                    disabled={refreshingFrames}
+                    className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {refreshingFrames ? "Refreshing..." : "Retry"}
+                  </button>
+                </div>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2">
                   {previewFrames.map((frame, index) => {
                     const isSelected =
-                      targetSelection?.frame_time_sec === frame.time_sec;
+                      targetSelection?.frameTimeSec === frame.timeSec;
                     return (
                       <button
                         key={`${frame.key}-${index}`}
@@ -651,8 +723,8 @@ export default function JobRunner() {
                         className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-amber-300/70"
                       >
                         <img
-                          src={frame.signed_url}
-                          alt={`Preview frame at ${frame.time_sec.toFixed(2)}s`}
+                          src={frame.signedUrl}
+                          alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
                           className="h-36 w-full object-cover"
                         />
                         {isSelected && targetSelection ? (
@@ -670,7 +742,7 @@ export default function JobRunner() {
                         ) : null}
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                           <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                            t={frame.time_sec.toFixed(2)}s
+                            t={frame.timeSec.toFixed(2)}s
                           </p>
                         </div>
                       </button>
@@ -739,8 +811,8 @@ export default function JobRunner() {
             >
               <img
                 ref={previewImageRef}
-                src={selectedPreviewFrame.signed_url}
-                alt={`Preview frame at ${selectedPreviewFrame.time_sec.toFixed(2)}s`}
+                src={selectedPreviewFrame.signedUrl}
+                alt={`Preview frame at ${selectedPreviewFrame.timeSec.toFixed(2)}s`}
                 className="h-auto w-full select-none"
                 draggable={false}
               />

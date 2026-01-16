@@ -22,29 +22,29 @@ export type JobProgress = {
 };
 
 export type JobResultSummary = {
-  player_role?: string;
-  overall_score?: number;
+  playerRole?: string;
+  overallScore?: number;
 };
 
 export type JobAssetVideo = {
-  s3_key?: string;
-  signed_url?: string;
-  expires_in?: number;
+  s3Key?: string;
+  signedUrl?: string;
+  expiresIn?: number;
 };
 
 export type JobClip = {
   index?: number;
   start?: number;
   end?: number;
-  s3_key?: string;
-  signed_url?: string;
-  expires_in?: number;
+  s3Key?: string;
+  signedUrl?: string;
+  expiresIn?: number;
 };
 
 export type PreviewFrame = {
-  time_sec: number;
+  timeSec: number;
   key: string;
-  signed_url: string;
+  signedUrl: string;
   width?: number | null;
   height?: number | null;
 };
@@ -54,23 +54,25 @@ export type JobResult = {
   summary?: JobResultSummary;
   radar?: Record<string, number>;
   assets?: {
-    input_video?: JobAssetVideo;
+    inputVideo?: JobAssetVideo;
   };
   clips?: JobClip[];
-  preview_frames?: PreviewFrame[];
+  previewFrames?: PreviewFrame[];
   [key: string]: any;
 };
 
 export type JobResponse = {
-  job_id?: string;
+  jobId?: string;
   status?: JobStatus;
   progress?: JobProgress;
   result?: JobResult;
-  player_ref?: FrameSelection;
+  playerRef?: FrameSelection;
   target?: JobTarget;
   error?: string;
-  created_at?: string;
-  updated_at?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  videoUrl?: string;
+  teamName?: string;
 };
 
 export type JobFrame = {
@@ -89,7 +91,7 @@ export type FrameSelection = {
 };
 
 export type TargetSelection = {
-  frame_time_sec: number;
+  frameTimeSec: number;
   x: number;
   y: number;
   w: number;
@@ -146,7 +148,8 @@ export async function createJob(payload: CreateJobPayload) {
     await handleError(response);
   }
 
-  return (await response.json()) as { job_id: string; status: JobStatus };
+  const data = (await response.json()) as { job_id: string; status: JobStatus };
+  return { jobId: data.job_id, status: data.status };
 }
 
 export async function enqueueJob(jobId: string) {
@@ -237,11 +240,20 @@ export async function saveJobTargetSelection(
   jobId: string,
   payload: { selections: TargetSelection[] }
 ) {
+  const requestPayload = {
+    selections: payload.selections.map((selection) => ({
+      frame_time_sec: selection.frameTimeSec,
+      x: selection.x,
+      y: selection.y,
+      w: selection.w,
+      h: selection.h
+    }))
+  };
   const response = await fetch(`/api/jobs/${jobId}/target`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(requestPayload)
   });
 
   if (!response.ok) {
