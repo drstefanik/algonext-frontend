@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   createJob,
   enqueueJob,
   getJob,
   getJobFrames,
   saveJobSelection,
+  saveJobPlayerRef,
   type FrameSelection,
   type JobFrame,
   type JobResponse
@@ -25,6 +26,13 @@ const statusStyles: Record<string, string> = {
   FAILED: "bg-rose-500/20 text-rose-200"
 };
 
+type PreviewDragState = {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+};
+
 export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
@@ -36,10 +44,21 @@ export default function JobRunner() {
   const [selections, setSelections] = useState<FrameSelection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [playerRefError, setPlayerRefError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loadingFrames, setLoadingFrames] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
+  const [savingPlayerRef, setSavingPlayerRef] = useState(false);
+  const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<JobFrame | null>(
+    null
+  );
+  const [playerRefSelection, setPlayerRefSelection] = useState<FrameSelection | null>(
+    null
+  );
+  const [previewDragState, setPreviewDragState] =
+    useState<PreviewDragState | null>(null);
+  const previewImageRef = useRef<HTMLImageElement | null>(null);
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -52,6 +71,19 @@ export default function JobRunner() {
     }
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
+
+  const previewFrames = job?.result?.preview_frames ?? [];
+  const playerRef = job?.player_ref ?? job?.result?.player_ref ?? null;
+  const shouldSelectPlayer = previewFrames.length > 0 && !playerRef;
+
+  const activePreviewRect = previewDragState
+    ? {
+        left: Math.min(previewDragState.startX, previewDragState.currentX),
+        top: Math.min(previewDragState.startY, previewDragState.currentY),
+        width: Math.abs(previewDragState.currentX - previewDragState.startX),
+        height: Math.abs(previewDragState.currentY - previewDragState.startY)
+      }
+    : null;
 
   useEffect(() => {
     if (!jobId || !polling) {
@@ -81,6 +113,32 @@ export default function JobRunner() {
       clearInterval(interval);
     };
   }, [jobId, polling]);
+
+  useEffect(() => {
+    if (!jobId) {
+      return;
+    }
+
+    let isMounted = true;
+    const fetchJob = async () => {
+      try {
+        const data = await getJob(jobId);
+        if (isMounted) {
+          setJob(data);
+        }
+      } catch (fetchError) {
+        if (isMounted) {
+          setError((fetchError as Error).message);
+        }
+      }
+    };
+
+    fetchJob();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [jobId]);
 
   useEffect(() => {
     if (!jobId || job?.status !== "WAITING_FOR_SELECTION") {
@@ -133,6 +191,9 @@ export default function JobRunner() {
       setJob({ job_id: response.job_id, status: response.status });
       setFrames([]);
       setSelections([]);
+      setSelectedPreviewFrame(null);
+      setPlayerRefSelection(null);
+      setPlayerRefError(null);
     } catch (createError) {
       setError((createError as Error).message);
     } finally {
@@ -180,6 +241,103 @@ export default function JobRunner() {
     }
   };
 
+  const handleOpenPreview = (frame: JobFrame) => {
+    setSelectedPreviewFrame(frame);
+    setPlayerRefSelection(null);
+    setPreviewDragState(null);
+    setPlayerRefError(null);
+  };
+
+  const handleClosePreview = () => {
+    setSelectedPreviewFrame(null);
+    setPlayerRefSelection(null);
+    setPreviewDragState(null);
+  };
+
+  const handlePreviewMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    const image = previewImageRef.current;
+    if (!image) {
+      return;
+    }
+    const rect = image.getBoundingClientRect();
+    const startX = event.clientX - rect.left;
+    const startY = event.clientY - rect.top;
+
+    setPreviewDragState({
+      startX,
+      startY,
+      currentX: startX,
+      currentY: startY
+    });
+  };
+
+  const handlePreviewMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    if (!previewDragState) {
+      return;
+    }
+    const image = previewImageRef.current;
+    if (!image) {
+      return;
+    }
+    const rect = image.getBoundingClientRect();
+    const currentX = event.clientX - rect.left;
+    const currentY = event.clientY - rect.top;
+    setPreviewDragState((prev) =>
+      prev
+        ? {
+            ...prev,
+            currentX,
+            currentY
+          }
+        : prev
+    );
+  };
+
+  const handlePreviewMouseUp = () => {
+    if (!previewDragState || !selectedPreviewFrame) {
+      return;
+    }
+    const image = previewImageRef.current;
+    if (!image) {
+      setPreviewDragState(null);
+      return;
+    }
+    const { startX, startY, currentX, currentY } = previewDragState;
+    const left = Math.min(startX, currentX);
+    const top = Math.min(startY, currentY);
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+
+    if (width > 1 && height > 1) {
+      setPlayerRefSelection({
+        t: selectedPreviewFrame.t,
+        x: left / image.clientWidth,
+        y: top / image.clientHeight,
+        w: width / image.clientWidth,
+        h: height / image.clientHeight
+      });
+    }
+    setPreviewDragState(null);
+  };
+
+  const handleSavePlayerRef = async () => {
+    if (!jobId || !playerRefSelection) {
+      return;
+    }
+    setPlayerRefError(null);
+    setSavingPlayerRef(true);
+    try {
+      await saveJobPlayerRef(jobId, playerRefSelection);
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+      handleClosePreview();
+    } catch (saveError) {
+      setPlayerRefError((saveError as Error).message);
+    } finally {
+      setSavingPlayerRef(false);
+    }
+  };
+
   const handleStopPolling = () => {
     setPolling(false);
   };
@@ -195,13 +353,18 @@ export default function JobRunner() {
     setSelections([]);
     setError(null);
     setSelectionError(null);
+    setPlayerRefError(null);
     setPolling(false);
     setLoadingFrames(false);
     setSavingSelection(false);
+    setSavingPlayerRef(false);
+    setSelectedPreviewFrame(null);
+    setPlayerRefSelection(null);
+    setPreviewDragState(null);
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
         <div className="flex items-start justify-between">
           <div>
@@ -310,6 +473,62 @@ export default function JobRunner() {
             {error}
           </div>
         ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Select Player</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Choose the player to track before processing continues.
+            </p>
+          </div>
+          <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-400">
+            Step
+          </span>
+        </div>
+
+        <div className="mt-6 space-y-4">
+          {shouldSelectPlayer ? (
+            <>
+              <p className="text-sm text-slate-400">
+                Click a preview frame to draw a bounding box around the player.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {previewFrames.map((frame, index) => (
+                  <button
+                    key={`${frame.t}-${index}`}
+                    type="button"
+                    onClick={() => handleOpenPreview(frame)}
+                    className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
+                  >
+                    <img
+                      src={frame.url}
+                      alt={`Preview frame at ${frame.t.toFixed(2)}s`}
+                      className="h-32 w-full object-cover"
+                    />
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
+                        t={frame.t.toFixed(2)}s
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500">
+                You will be asked to draw one bounding box in the full-size view.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">
+              {playerRef
+                ? "Player reference already saved."
+                : jobId
+                ? "Preview frames are not available yet. Check again soon."
+                : "Create a job to load preview frames."}
+            </p>
+          )}
+        </div>
       </section>
 
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
@@ -440,6 +659,92 @@ export default function JobRunner() {
 
         {job && job.status === "COMPLETED" ? <ResultView job={job} /> : null}
       </section>
+
+      {selectedPreviewFrame ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  Draw player box
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Drag to mark the player in the selected frame.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleClosePreview}
+                className="rounded-lg border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+              >
+                Close
+              </button>
+            </div>
+
+            <div
+              className="relative mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-950"
+              onMouseDown={handlePreviewMouseDown}
+              onMouseMove={handlePreviewMouseMove}
+              onMouseUp={handlePreviewMouseUp}
+              onMouseLeave={handlePreviewMouseUp}
+            >
+              <img
+                ref={previewImageRef}
+                src={selectedPreviewFrame.url}
+                alt={`Preview frame at ${selectedPreviewFrame.t.toFixed(2)}s`}
+                className="h-auto w-full select-none"
+                draggable={false}
+              />
+              <div className="pointer-events-none absolute inset-0">
+                {playerRefSelection ? (
+                  <div
+                    className="absolute rounded border border-emerald-400 bg-emerald-400/20"
+                    style={{
+                      left: `${playerRefSelection.x * 100}%`,
+                      top: `${playerRefSelection.y * 100}%`,
+                      width: `${playerRefSelection.w * 100}%`,
+                      height: `${playerRefSelection.h * 100}%`
+                    }}
+                  />
+                ) : null}
+                {activePreviewRect ? (
+                  <div
+                    className="absolute rounded border border-blue-400 bg-blue-400/20"
+                    style={{
+                      left: activePreviewRect.left,
+                      top: activePreviewRect.top,
+                      width: activePreviewRect.width,
+                      height: activePreviewRect.height
+                    }}
+                  />
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs text-slate-400">
+                {playerRefSelection
+                  ? "Bounding box ready. Save to continue."
+                  : "Drag on the image to draw the player box."}
+              </span>
+              <button
+                type="button"
+                onClick={handleSavePlayerRef}
+                disabled={!playerRefSelection || savingPlayerRef}
+                className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingPlayerRef ? "Saving..." : "Save selection"}
+              </button>
+            </div>
+
+            {playerRefError ? (
+              <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                {playerRefError}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
