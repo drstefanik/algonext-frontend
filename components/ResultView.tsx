@@ -9,9 +9,7 @@ const formatScore = (value?: number) => {
 
 export default function ResultView({ job }: { job: JobResponse }) {
   const summary = job.result?.summary;
-  const radarEntries = job.result?.radar
-    ? Object.entries(job.result.radar)
-    : [];
+  const radarEntries = Object.entries(job.result?.radar ?? {});
   const clips = job.result?.clips ?? [];
 
   return (
@@ -42,7 +40,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
         <h4 className="text-lg font-semibold text-white">Radar Breakdown</h4>
         {radarEntries.length === 0 ? (
           <p className="mt-2 text-sm text-slate-400">
-            No radar data available yet.
+            Radar data not available.
           </p>
         ) : (
           <dl className="mt-4 grid gap-3 sm:grid-cols-2">

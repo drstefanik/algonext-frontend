@@ -10,7 +10,8 @@ import {
   saveJobPlayerRef,
   type FrameSelection,
   type JobFrame,
-  type JobResponse
+  type JobResponse,
+  type PreviewFrame
 } from "@/lib/api";
 import FrameBoxSelector from "@/components/FrameBoxSelector";
 import ProgressBar from "@/components/ProgressBar";
@@ -51,7 +52,7 @@ export default function JobRunner() {
   const [loadingFrames, setLoadingFrames] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
-  const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<JobFrame | null>(
+  const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
     null
   );
   const [playerRefSelection, setPlayerRefSelection] = useState<FrameSelection | null>(
@@ -251,7 +252,7 @@ export default function JobRunner() {
     }
   };
 
-  const handleOpenPreview = (frame: JobFrame) => {
+  const handleOpenPreview = (frame: PreviewFrame) => {
     setSelectedPreviewFrame(frame);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
@@ -320,7 +321,7 @@ export default function JobRunner() {
 
     if (width > 1 && height > 1) {
       setPlayerRefSelection({
-        t: selectedPreviewFrame.t,
+        t: selectedPreviewFrame.time_sec,
         x: left / image.clientWidth,
         y: top / image.clientHeight,
         w: width / image.clientWidth,
@@ -513,13 +514,13 @@ export default function JobRunner() {
                     className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
                   >
                     <img
-                      src={frame.url}
-                      alt={`Preview frame at ${frame.t.toFixed(2)}s`}
+                      src={frame.signed_url}
+                      alt={`Preview frame at ${frame.time_sec.toFixed(2)}s`}
                       className="h-32 w-full object-cover"
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                        t={frame.t.toFixed(2)}s
+                        t={frame.time_sec.toFixed(2)}s
                       </p>
                     </div>
                   </button>
@@ -705,8 +706,8 @@ export default function JobRunner() {
             >
               <img
                 ref={previewImageRef}
-                src={selectedPreviewFrame.url}
-                alt={`Preview frame at ${selectedPreviewFrame.t.toFixed(2)}s`}
+                src={selectedPreviewFrame.signed_url}
+                alt={`Preview frame at ${selectedPreviewFrame.time_sec.toFixed(2)}s`}
                 className="h-auto w-full select-none"
                 draggable={false}
               />
