@@ -6,11 +6,6 @@ type RouteContext = {
   };
 };
 
-function buildProxyHeaders(request: Request) {
-  const contentType = request.headers.get("content-type");
-  return contentType ? { "Content-Type": contentType } : {};
-}
-
 async function proxyRequest(request: Request, targetUrl: string) {
   if (!API_ORIGIN) {
     return new Response(
@@ -23,7 +18,7 @@ async function proxyRequest(request: Request, targetUrl: string) {
   }
 
   try {
-    const headers = buildProxyHeaders(request);
+    const headers = new Headers();
     const upstreamResponse = await fetch(targetUrl, {
       method: request.method,
       headers

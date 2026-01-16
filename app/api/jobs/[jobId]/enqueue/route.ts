@@ -6,11 +6,6 @@ type RouteContext = {
   };
 };
 
-function buildProxyHeaders(request: Request) {
-  const contentType = request.headers.get("content-type");
-  return contentType ? { "Content-Type": contentType } : {};
-}
-
 async function proxyRequest(request: Request, targetUrl: string) {
   if (!API_ORIGIN) {
     return new Response(
@@ -23,12 +18,14 @@ async function proxyRequest(request: Request, targetUrl: string) {
   }
 
   try {
-    const headers = buildProxyHeaders(request);
-    const body = await request.text();
+    const headers = new Headers();
+    const contentType = request.headers.get("content-type");
+    if (contentType) {
+      headers.set("content-type", contentType);
+    }
     const upstreamResponse = await fetch(targetUrl, {
-      method: request.method,
-      headers,
-      body: body || undefined
+      method: "POST",
+      headers
     });
 
     const responseBody = await upstreamResponse.text();
