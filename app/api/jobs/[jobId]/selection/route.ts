@@ -22,13 +22,10 @@ async function proxyRequest(request: Request, targetUrl: string) {
     );
   }
 
-  return forward(request, targetUrl, {
-    methodOverride: "POST",
-    includeBody: false
-  });
+  return forward(request, targetUrl, { methodOverride: "POST" });
 }
 
 export async function POST(request: Request, context: RouteContext) {
   const { jobId } = context.params;
-  return proxyRequest(request, `${API_BASE_URL}/jobs/${jobId}/enqueue`);
+  return proxyRequest(request, `${API_BASE_URL}/jobs/${jobId}/selection`);
 }

@@ -1,15 +1,15 @@
 import { forward } from "../proxy";
 
-const API_ORIGIN = process.env.API_ORIGIN;
+const API_BASE_URL = process.env.API_BASE_URL;
 
 type ProxyContext = {
   targetUrl: string;
 };
 
 async function proxyRequest(request: Request, { targetUrl }: ProxyContext) {
-  if (!API_ORIGIN) {
+  if (!API_BASE_URL) {
     return new Response(
-      JSON.stringify({ error: "Missing API_ORIGIN environment variable." }),
+      JSON.stringify({ error: "Missing API_BASE_URL environment variable." }),
       {
         status: 500,
         headers: {
@@ -25,6 +25,6 @@ async function proxyRequest(request: Request, { targetUrl }: ProxyContext) {
 
 export async function POST(request: Request) {
   return proxyRequest(request, {
-    targetUrl: `${API_ORIGIN}/jobs`
+    targetUrl: `${API_BASE_URL}/jobs`
   });
 }
