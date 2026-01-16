@@ -33,6 +33,8 @@ export type JobResult = {
       signed_url?: string;
     }>;
   };
+  preview_frames?: JobFrame[];
+  player_ref?: FrameSelection;
 };
 
 export type JobResponse = {
@@ -40,6 +42,7 @@ export type JobResponse = {
   status?: JobStatus;
   progress?: JobProgress;
   result?: JobResult;
+  player_ref?: FrameSelection;
   error?: string;
   created_at?: string;
   updated_at?: string;
@@ -161,6 +164,21 @@ export async function saveJobSelection(
   }
 ) {
   const response = await fetch(`/api/jobs/${jobId}/selection`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return response;
+}
+
+export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
+  const response = await fetch(`/api/jobs/${jobId}/player-ref`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
