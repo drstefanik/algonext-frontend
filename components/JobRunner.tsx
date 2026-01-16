@@ -46,15 +46,15 @@ export default function JobRunner() {
   }, [statusLabel]);
 
   useEffect(() => {
-    if (!polling || !jobId) {
+    if (!jobId || !polling) {
       return;
     }
 
-    let isActive = true;
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    const tick = async () => {
       try {
         const nextJob = await getJob(jobId);
-        if (!isActive) {
+        if (cancelled) {
           return;
         }
         setJob(nextJob);
@@ -63,16 +63,19 @@ export default function JobRunner() {
           setPolling(false);
         }
       } catch (pollError) {
-        if (!isActive) {
+        if (cancelled) {
           return;
         }
         setError((pollError as Error).message);
         setPolling(false);
       }
-    }, 2000);
+    };
+
+    tick();
+    const interval = setInterval(tick, 2000);
 
     return () => {
-      isActive = false;
+      cancelled = true;
       clearInterval(interval);
     };
   }, [jobId, polling]);

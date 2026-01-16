@@ -14,7 +14,10 @@ async function proxyRequest(request: Request, targetUrl: string) {
       JSON.stringify({ error: "Missing API_ORIGIN environment variable." }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: {
+          "Content-Type": "application/json",
+          "cache-control": "no-store"
+        }
       }
     );
   }

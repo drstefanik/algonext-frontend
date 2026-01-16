@@ -28,5 +28,22 @@ This is a Next.js (App Router) frontend for creating, enqueueing, and monitoring
 2. Add the environment variable `API_ORIGIN` (non-public) in the Vercel project settings.
 3. Trigger a build & deploy.
 
+## Verification checklist
+1. Create a job from the UI.
+2. Enqueue the job.
+3. Confirm the status transitions from `RUNNING` → `COMPLETED`.
+4. Confirm `progress.pct` reaches `100`.
+5. Confirm `result` is not `{}`.
+
+### Database debug command
+```bash
+docker compose exec db psql -U postgres -d app -c "
+select id,status,progress,result is not null as has_result,updated_at
+from analysis_jobs
+order by updated_at desc
+limit 5;
+"
+```
+
 ## CORS note
 The frontend uses Next.js route handlers as a proxy, so browser requests stay same-origin while the server forwards them to the backend API.

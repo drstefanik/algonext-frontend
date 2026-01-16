@@ -28,13 +28,19 @@ export async function forward(
 
     return new Response(responseBody, {
       status: upstreamResponse.status,
-      headers: { "content-type": upstreamContentType }
+      headers: {
+        "content-type": upstreamContentType,
+        "cache-control": "no-store"
+      }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(JSON.stringify({ error: `Proxy error: ${message}` }), {
       status: 502,
-      headers: { "content-type": "application/json" }
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store"
+      }
     });
   }
 }
