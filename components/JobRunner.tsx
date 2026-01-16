@@ -508,7 +508,7 @@ export default function JobRunner() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {previewFrames.map((frame, index) => (
                   <button
-                    key={`${frame.t}-${index}`}
+                    key={`${frame.key}-${index}`}
                     type="button"
                     onClick={() => handleOpenPreview(frame)}
                     className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
