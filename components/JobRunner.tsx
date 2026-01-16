@@ -35,8 +35,6 @@ export default function JobRunner() {
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-
   const statusLabel = status ?? job?.status ?? "—";
   const progressPct = job?.progress?.pct ?? 0;
 
@@ -81,10 +79,6 @@ export default function JobRunner() {
 
   const handleCreateJob = async () => {
     setError(null);
-    if (!apiBaseUrl) {
-      setError("Missing NEXT_PUBLIC_API_BASE_URL");
-      return;
-    }
     if (!videoUrl.trim()) {
       setError("Video URL is required.");
       return;
@@ -157,13 +151,6 @@ export default function JobRunner() {
           </span>
         </div>
 
-        {!apiBaseUrl ? (
-          <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-            Missing NEXT_PUBLIC_API_BASE_URL. Set the env variable to enable API
-            requests.
-          </div>
-        ) : null}
-
         <div className="mt-6 space-y-4">
           <label className="block text-sm text-slate-300">
             Video URL
@@ -214,7 +201,7 @@ export default function JobRunner() {
           <button
             type="button"
             onClick={handleCreateJob}
-            disabled={submitting || !apiBaseUrl}
+            disabled={submitting}
             className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? "Creating..." : "Create Job"}
