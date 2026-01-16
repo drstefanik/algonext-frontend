@@ -22,7 +22,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
               Overall Score
             </p>
             <p className="mt-2 text-3xl font-semibold text-emerald-400">
-              {formatScore(summary?.overall_score)}
+              {formatScore(summary?.overallScore)}
             </p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -30,7 +30,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
               Role
             </p>
             <p className="mt-2 text-xl font-semibold text-white">
-              {summary?.player_role ?? "—"}
+              {summary?.playerRole ?? "—"}
             </p>
           </div>
         </div>
@@ -68,9 +68,9 @@ export default function ResultView({ job }: { job: JobResponse }) {
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
               Input Video
             </p>
-            {job.result?.assets?.input_video?.signed_url ? (
+            {job.result?.assets?.inputVideo?.signedUrl ? (
               <a
-                href={job.result.assets.input_video.signed_url}
+                href={job.result.assets.inputVideo.signedUrl}
                 className="mt-2 inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-300"
                 target="_blank"
                 rel="noreferrer"
@@ -92,15 +92,15 @@ export default function ResultView({ job }: { job: JobResponse }) {
               <ul className="mt-2 space-y-3">
                 {clips.map((clip, index) => (
                   <li
-                    key={`${clip.signed_url ?? "clip"}-${index}`}
+                    key={`${clip.signedUrl ?? "clip"}-${index}`}
                     className="flex flex-col gap-1 rounded-lg border border-slate-800 bg-slate-950 p-3"
                   >
                     <span className="text-xs text-slate-500">
                       {clip.start ?? "?"}s - {clip.end ?? "?"}s
                     </span>
-                    {clip.signed_url ? (
+                    {clip.signedUrl ? (
                       <a
-                        href={clip.signed_url}
+                        href={clip.signedUrl}
                         className="text-emerald-400 hover:text-emerald-300"
                         target="_blank"
                         rel="noreferrer"

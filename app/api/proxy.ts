@@ -26,7 +26,7 @@ export async function forward(
     const headers = new Headers();
     request.headers.forEach((value, key) => {
       const k = key.toLowerCase();
-      if (!HOP_BY_H_HOP.has(k)) headers.set(key, value);
+      if (!HOP_BY_HOP.has(k)) headers.set(key, value);
     });
 
     // Body (solo se previsto)
