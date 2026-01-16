@@ -22,25 +22,24 @@ export async function forward(
   { methodOverride, includeBody = true }: ForwardOptions = {}
 ) {
   try {
-    // Forward headers (quasi tutti), esclusi hop-by-hop
     const headers = new Headers();
     request.headers.forEach((value, key) => {
       const k = key.toLowerCase();
       if (!HOP_BY_HOP.has(k)) headers.set(key, value);
     });
 
-    const hasBody = includeBody && request.body != null;
+    // IMPORTANT: non usare request.body (stream) su Vercel.
+    // Bufferizza il body: stabile per JSON piccoli.
+    const bodyText = includeBody ? await request.clone().text() : undefined;
 
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: hasBody ? request.body : undefined,
-      ...(hasBody ? ({ duplex: "half" } as any) : {}),
+      body: includeBody ? bodyText : undefined,
     });
 
     const upstreamContentType =
       upstreamResponse.headers.get("content-type") ?? "text/plain; charset=utf-8";
-
     const responseBody = await upstreamResponse.text();
 
     return new Response(responseBody, {
