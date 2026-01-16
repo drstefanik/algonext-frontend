@@ -82,6 +82,10 @@ export type JobFrame = {
   h: number;
 };
 
+export type JobFrameListResponse = {
+  items: JobFrame[];
+};
+
 export type FrameSelection = {
   t: number;
   x: number;
@@ -194,6 +198,19 @@ export async function getJobFrames(jobId: string, count = 8) {
   }
 
   return (await response.json()) as { frames: JobFrame[] };
+}
+
+export async function listJobFrames(jobId: string) {
+  const response = await fetch(`/api/jobs/${jobId}/frames/list`, {
+    method: "GET",
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  return (await response.json()) as JobFrameListResponse;
 }
 
 export async function saveJobSelection(

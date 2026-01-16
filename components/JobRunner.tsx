@@ -6,10 +6,12 @@ import {
   createJob,
   enqueueJob,
   getJob,
+  listJobFrames,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameSelection,
   type JobResponse,
+  type JobFrame,
   type PreviewFrame,
   type TargetSelection
 } from "@/lib/api";
@@ -64,6 +66,12 @@ export default function JobRunner() {
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
+  const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
+  const [previewPollingError, setPreviewPollingError] = useState<string | null>(
+    null
+  );
+  const [previewPollingActive, setPreviewPollingActive] = useState(false);
+  const [previewPollingAttempt, setPreviewPollingAttempt] = useState(0);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const playerSectionRef = useRef<HTMLElement | null>(null);
   const targetSectionRef = useRef<HTMLDivElement | null>(null);
@@ -87,13 +95,22 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const previewFrames = job?.result?.previewFrames ?? [];
+  const jobPreviewFrames = job?.result?.previewFrames ?? [];
+  const resolvedPreviewFrames =
+    previewFrames.length > 0 ? previewFrames : jobPreviewFrames;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
-  const shouldSelectPlayer = previewFrames.length > 0 && !playerRef;
+  const shouldSelectPlayer = resolvedPreviewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
   const hasTargetSelection = Boolean(targetSelection ?? jobTargetSelection);
   const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
+  const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
+  const showTargetSection =
+    isWaitingForTarget || (isExtractingPreviews && resolvedPreviewFrames.length > 0);
+  const showPreviewFrameLoader =
+    jobId &&
+    resolvedPreviewFrames.length === 0 &&
+    (isExtractingPreviews || isWaitingForPlayer || isWaitingForTarget);
 
   const activePreviewRect = previewDragState
     ? {
@@ -164,6 +181,117 @@ export default function JobRunner() {
       setTargetSelection(jobTargetSelection);
     }
   }, [jobTargetSelection]);
+
+  useEffect(() => {
+    if (!isExtractingPreviews) {
+      setPreviewPollingActive(false);
+    }
+  }, [isExtractingPreviews]);
+
+  useEffect(() => {
+    if (!jobId) {
+      setPreviewFrames([]);
+      setPreviewPollingError(null);
+      setPreviewPollingActive(false);
+      setPreviewPollingAttempt(0);
+      return;
+    }
+
+    if (jobPreviewFrames.length > 0) {
+      setPreviewFrames(jobPreviewFrames);
+      setPreviewPollingError(null);
+      setPreviewPollingActive(false);
+    }
+  }, [jobId, jobPreviewFrames]);
+
+  useEffect(() => {
+    if (!jobId || !isExtractingPreviews || previewFrames.length > 0) {
+      return;
+    }
+
+    if (previewPollingError || previewPollingActive) {
+      return;
+    }
+
+    let isMounted = true;
+    let attempts = 0;
+    const maxAttempts = 20;
+    const intervalMs = 1500;
+
+    setPreviewPollingActive(true);
+
+    const interval = setInterval(async () => {
+      try {
+        attempts += 1;
+        const response = await listJobFrames(jobId);
+        const items = response.items ?? [];
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (items.length > 0) {
+          const mappedFrames = items.map((frame, index) => {
+            const timeSec =
+              (frame as JobFrame & { time_sec?: number; timeSec?: number }).t ??
+              (frame as JobFrame & { time_sec?: number; timeSec?: number })
+                .time_sec ??
+              (frame as JobFrame & { time_sec?: number; timeSec?: number }).timeSec ??
+              0;
+            const key =
+              (frame as JobFrame & { key?: string }).key ??
+              `frame-${timeSec}-${index}`;
+            const signedUrl =
+              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
+                .url ??
+              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
+                .signedUrl ??
+              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
+                .signed_url ??
+              "";
+
+            return {
+              timeSec,
+              key,
+              signedUrl,
+              width: frame.w ?? null,
+              height: frame.h ?? null
+            };
+          });
+          setPreviewFrames(mappedFrames);
+          setPreviewPollingActive(false);
+          setPreviewPollingError(null);
+          clearInterval(interval);
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          setPreviewPollingError("Preview polling timed out. Please retry.");
+          setPreviewPollingActive(false);
+          clearInterval(interval);
+        }
+      } catch (pollError) {
+        if (!isMounted) {
+          return;
+        }
+        setPreviewPollingError((pollError as Error).message);
+        setPreviewPollingActive(false);
+        clearInterval(interval);
+      }
+    }, intervalMs);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [
+    jobId,
+    isExtractingPreviews,
+    previewFrames.length,
+    previewPollingError,
+    previewPollingActive,
+    previewPollingAttempt
+  ]);
 
   const handleCreateJob = async () => {
     setError(null);
@@ -364,6 +492,11 @@ export default function JobRunner() {
     }
   };
 
+  const handleRetryPreviewPolling = () => {
+    setPreviewPollingError(null);
+    setPreviewPollingAttempt((prev) => prev + 1);
+  };
+
   const handleFocusStep = () => {
     if (isWaitingForTarget) {
       targetSectionRef.current?.scrollIntoView({
@@ -399,6 +532,10 @@ export default function JobRunner() {
     setSelectedPreviewFrame(null);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
+    setPreviewFrames([]);
+    setPreviewPollingError(null);
+    setPreviewPollingActive(false);
+    setPreviewPollingAttempt(0);
   };
 
   return (
@@ -545,7 +682,7 @@ export default function JobRunner() {
                 Click a preview frame to draw a bounding box around the player.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
-                {previewFrames.map((frame, index) => (
+                {resolvedPreviewFrames.map((frame, index) => (
                   <button
                     key={`${frame.key}-${index}`}
                     type="button"
@@ -577,15 +714,28 @@ export default function JobRunner() {
                 <>
                   <div className="flex items-center gap-2">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                    <span>Preview frames are loading.</span>
+                    <span>
+                      {previewPollingActive
+                        ? "Preview frames are loading."
+                        : "Waiting for previews."}
+                    </span>
                   </div>
+                  {previewPollingError ? (
+                    <p className="text-xs text-rose-200">{previewPollingError}</p>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={handleRefreshJob}
-                    disabled={refreshingFrames}
+                    onClick={
+                      previewPollingError ? handleRetryPreviewPolling : handleRefreshJob
+                    }
+                    disabled={previewPollingError ? false : refreshingFrames}
                     className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {refreshingFrames ? "Refreshing..." : "Retry"}
+                    {previewPollingError
+                      ? "Retry polling"
+                      : refreshingFrames
+                      ? "Refreshing..."
+                      : "Retry"}
                   </button>
                 </>
               ) : (
@@ -679,7 +829,7 @@ export default function JobRunner() {
           </div>
         </div>
 
-        {job?.status === "WAITING_FOR_SELECTION" ? (
+        {showTargetSection ? (
           <div
             ref={targetSectionRef}
             className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6"
@@ -695,24 +845,45 @@ export default function JobRunner() {
             </div>
 
             <div className="mt-4 space-y-4">
-              {previewFrames.length === 0 ? (
+              {resolvedPreviewFrames.length === 0 ? (
                 <div className="space-y-3 text-sm text-slate-400">
-                  <div className="flex items-center gap-2">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
-                    <span>No frames yet. Waiting for previews.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleRefreshJob}
-                    disabled={refreshingFrames}
-                    className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {refreshingFrames ? "Refreshing..." : "Retry"}
-                  </button>
+                  {showPreviewFrameLoader ? (
+                    <div className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
+                      <span>
+                        {previewPollingActive
+                          ? "Preview frames are loading."
+                          : "Waiting for previews."}
+                      </span>
+                    </div>
+                  ) : (
+                    <p>No frames yet.</p>
+                  )}
+                  {previewPollingError ? (
+                    <p className="text-xs text-rose-200">{previewPollingError}</p>
+                  ) : null}
+                  {jobId ? (
+                    <button
+                      type="button"
+                      onClick={
+                        previewPollingError
+                          ? handleRetryPreviewPolling
+                          : handleRefreshJob
+                      }
+                      disabled={previewPollingError ? false : refreshingFrames}
+                      className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {previewPollingError
+                        ? "Retry polling"
+                        : refreshingFrames
+                        ? "Refreshing..."
+                        : "Retry"}
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {previewFrames.map((frame, index) => {
+                  {resolvedPreviewFrames.map((frame, index) => {
                     const isSelected =
                       targetSelection?.frameTimeSec === frame.timeSec;
                     return (
