@@ -73,6 +73,7 @@ export async function createJob(payload: CreateJobPayload) {
   const response = await fetch("/api/jobs", {
     method: "POST",
     headers: jsonHeaders,
+    cache: "no-store",
     body: JSON.stringify(payload)
   });
 
@@ -87,6 +88,7 @@ export async function enqueueJob(jobId: string) {
   const response = await fetch(`/api/jobs/${jobId}/enqueue`, {
     method: "POST",
     headers: jsonHeaders,
+    cache: "no-store"
   });
 
   if (!response.ok) {
@@ -98,7 +100,8 @@ export async function enqueueJob(jobId: string) {
 
 export async function getJob(jobId: string) {
   const response = await fetch(`/api/jobs/${jobId}`, {
-    method: "GET"
+    method: "GET",
+    cache: "no-store"
   });
 
   if (!response.ok) {
