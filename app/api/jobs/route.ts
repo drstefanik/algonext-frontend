@@ -1,3 +1,5 @@
+import { forward } from "../proxy";
+
 const API_ORIGIN = process.env.API_ORIGIN;
 
 type ProxyContext = {
@@ -15,34 +17,7 @@ async function proxyRequest(request: Request, { targetUrl }: ProxyContext) {
     );
   }
 
-  try {
-    const headers = new Headers();
-    const contentType = request.headers.get("content-type");
-    if (contentType) {
-      headers.set("content-type", contentType);
-    }
-    const body = await request.text();
-    const upstreamResponse = await fetch(targetUrl, {
-      method: request.method,
-      headers,
-      body: body || undefined
-    });
-
-    const responseBody = await upstreamResponse.text();
-    const contentType =
-      upstreamResponse.headers.get("content-type") ?? "text/plain";
-
-    return new Response(responseBody, {
-      status: upstreamResponse.status,
-      headers: { "Content-Type": contentType }
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: `Proxy error: ${message}` }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
+  return forward(request, targetUrl);
 }
 
 export async function POST(request: Request) {
