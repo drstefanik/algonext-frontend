@@ -39,8 +39,6 @@ export type JobResponse = {
   updated_at?: string;
 };
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL;
-
 const jsonHeaders = {
   "Content-Type": "application/json"
 };
@@ -71,19 +69,10 @@ async function handleError(response: Response) {
   throw new Error(message);
 }
 
-function ensureApiBase(): string {
-  if (!API) {
-    throw new Error("Missing NEXT_PUBLIC_API_BASE_URL");
-  }
-  return API;
-}
-
 export async function createJob(payload: CreateJobPayload) {
-  const apiBase = ensureApiBase();
-  const response = await fetch(`${apiBase}/jobs`, {
+  const response = await fetch("/api/jobs", {
     method: "POST",
     headers: jsonHeaders,
-    mode: "cors",
     body: JSON.stringify(payload)
   });
 
@@ -95,11 +84,9 @@ export async function createJob(payload: CreateJobPayload) {
 }
 
 export async function enqueueJob(jobId: string) {
-  const apiBase = ensureApiBase();
-  const response = await fetch(`${apiBase}/jobs/${jobId}/enqueue`, {
+  const response = await fetch(`/api/jobs/${jobId}/enqueue`, {
     method: "POST",
     headers: jsonHeaders,
-    mode: "cors"
   });
 
   if (!response.ok) {
@@ -110,10 +97,8 @@ export async function enqueueJob(jobId: string) {
 }
 
 export async function getJob(jobId: string) {
-  const apiBase = ensureApiBase();
-  const response = await fetch(`${apiBase}/jobs/${jobId}`, {
-    method: "GET",
-    mode: "cors"
+  const response = await fetch(`/api/jobs/${jobId}`, {
+    method: "GET"
   });
 
   if (!response.ok) {
