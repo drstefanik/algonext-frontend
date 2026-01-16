@@ -29,10 +29,13 @@ export async function forward(
       if (!HOP_BY_HOP.has(k)) headers.set(key, value);
     });
 
+    const hasBody = includeBody && request.body != null;
+
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: includeBody ? request.body : undefined,
+      body: hasBody ? request.body : undefined,
+      ...(hasBody ? ({ duplex: "half" } as any) : {}),
     });
 
     const upstreamContentType =
