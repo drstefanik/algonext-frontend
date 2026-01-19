@@ -183,11 +183,13 @@ export async function createJob(payload: CreateJobPayload) {
     await handleError(response);
   }
 
-  const payload = (await response.json()) as unknown;
+  const responsePayload = (await response.json()) as unknown;
   const normalized =
-    payload && typeof payload === "object" && "data" in payload
-      ? (payload as { data?: unknown }).data
-      : payload;
+    responsePayload &&
+    typeof responsePayload === "object" &&
+    "data" in responsePayload
+      ? (responsePayload as { data?: unknown }).data
+      : responsePayload;
   const normalizedRecord = (normalized ?? {}) as {
     id?: string;
     job_id?: string;
