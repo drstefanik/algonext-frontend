@@ -1,5 +1,16 @@
-export type CreateJobPayload = {
-  video_url: string;
+type CreateJobVideoPayload =
+  | {
+      video_url: string;
+      video_key?: never;
+      video_bucket?: never;
+    }
+  | {
+      video_key: string;
+      video_bucket: string;
+      video_url?: never;
+    };
+
+export type CreateJobPayload = CreateJobVideoPayload & {
   role: string;
   category: string;
   shirt_number: number;
@@ -147,10 +158,16 @@ async function handleError(response: Response) {
 
   try {
     const data = await response.clone().json();
-    if (data?.message) {
+    if (data?.detail?.error?.message) {
+      message = data.detail.error.message;
+    } else if (data?.error?.message) {
+      message = data.error.message;
+    } else if (data?.message) {
       message = data.message;
     } else if (data?.error) {
       message = data.error;
+    } else if (data?.detail) {
+      message = data.detail;
     } else {
       message = JSON.stringify(data);
     }

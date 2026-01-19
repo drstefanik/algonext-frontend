@@ -33,10 +33,18 @@ const buildHttpErrorMessage = async (response: Response) => {
 
   try {
     const data = (await response.clone().json()) as
-      | { error?: string; detail?: string; message?: string }
+      | {
+          error?: string | { message?: string };
+          detail?: string | { error?: { message?: string } };
+          message?: string;
+        }
       | undefined;
     if (data) {
-      message = data.error ?? data.detail ?? data.message ?? "";
+      message =
+        (typeof data.error === "object" ? data.error?.message : data.error) ??
+        (typeof data.detail === "object" ? data.detail?.error?.message : data.detail) ??
+        data.message ??
+        "";
     }
   } catch {
     // ignore json parse errors
@@ -54,12 +62,61 @@ const buildHttpErrorMessage = async (response: Response) => {
   return message ? `${prefix}: ${message}` : prefix;
 };
 
+const extractNestedErrorMessage = (error: unknown) => {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+
+  if ("message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+
+  if ("error" in error) {
+    const nestedError = (error as { error?: unknown }).error;
+    if (typeof nestedError === "string") {
+      return nestedError;
+    }
+    if (
+      nestedError &&
+      typeof nestedError === "object" &&
+      "message" in nestedError &&
+      typeof nestedError.message === "string"
+    ) {
+      return nestedError.message;
+    }
+  }
+
+  if ("detail" in error) {
+    const detail = (error as { detail?: unknown }).detail;
+    if (typeof detail === "string") {
+      return detail;
+    }
+    if (
+      detail &&
+      typeof detail === "object" &&
+      "error" in detail &&
+      detail.error &&
+      typeof detail.error === "object" &&
+      "message" in detail.error &&
+      typeof detail.error.message === "string"
+    ) {
+      return detail.error.message;
+    }
+  }
+
+  return null;
+};
+
 const toErrorMessage = (error: unknown) => {
   if (error instanceof Error) {
     return error.message;
   }
   if (typeof error === "string") {
     return error;
+  }
+  const nestedMessage = extractNestedErrorMessage(error);
+  if (nestedMessage) {
+    return nestedMessage;
   }
   try {
     return JSON.stringify(error);
@@ -383,8 +440,9 @@ export default function JobRunner() {
 
   const handleCreateJob = async () => {
     setError(null);
-    if (!videoUrl.trim()) {
-      setError("Video URL is required.");
+    const trimmedVideo = videoUrl.trim();
+    if (!trimmedVideo) {
+      setError("Video URL or key is required.");
       return;
     }
     if (!teamName.trim()) {
@@ -394,8 +452,11 @@ export default function JobRunner() {
 
     setSubmitting(true);
     try {
+      const isHttpUrl = /^https?:\/\//i.test(trimmedVideo);
       const response = await createJob({
-        video_url: videoUrl.trim(),
+        ...(isHttpUrl
+          ? { video_url: trimmedVideo }
+          : { video_key: trimmedVideo, video_bucket: "fnh" }),
         role,
         category,
         shirt_number: Number(shirtNumber),
@@ -681,7 +742,7 @@ export default function JobRunner() {
 
         <div className="mt-6 space-y-4">
           <label className="block text-sm text-slate-300">
-            Video URL
+            Video URL or Video Key
             <textarea
               value={videoUrl}
               onChange={(event) => setVideoUrl(event.target.value)}
