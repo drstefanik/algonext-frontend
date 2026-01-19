@@ -111,6 +111,37 @@ const jsonHeaders = {
   "Content-Type": "application/json"
 };
 
+const DEFAULT_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
+) {
+  const controller = new AbortController();
+  const { signal, ...restInit } = init;
+
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+  }
+
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...restInit, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Request timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function handleError(response: Response) {
   let message = response.statusText || "Request failed";
 
@@ -138,7 +169,7 @@ async function handleError(response: Response) {
 }
 
 export async function createJob(payload: CreateJobPayload) {
-  const response = await fetch("/api/jobs", {
+  const response = await fetchWithTimeout("/api/jobs", {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
@@ -152,12 +183,22 @@ export async function createJob(payload: CreateJobPayload) {
     await handleError(response);
   }
 
-  const data = (await response.json()) as { job_id: string; status: JobStatus };
-  return { jobId: data.job_id, status: data.status };
+  const data = (await response.json()) as
+    | { job_id?: string; status?: JobStatus; jobId?: string }
+    | {
+        ok?: boolean;
+        data?: { id?: string; job_id?: string; jobId?: string; status?: JobStatus };
+      };
+  const jobId =
+    "job_id" in data
+      ? data.job_id ?? data.jobId
+      : data.data?.job_id ?? data.data?.jobId ?? data.data?.id;
+  const status = "status" in data ? data.status : data.data?.status;
+  return { jobId, status };
 }
 
 export async function enqueueJob(jobId: string) {
-  const response = await fetch(`/api/jobs/${jobId}/enqueue`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/enqueue`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store"
@@ -171,7 +212,7 @@ export async function enqueueJob(jobId: string) {
 }
 
 export async function getJob(jobId: string) {
-  const response = await fetch(`/api/jobs/${jobId}`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}`, {
     method: "GET",
     cache: "no-store"
   });
@@ -188,10 +229,13 @@ export async function getJobStatus(jobId: string) {
 }
 
 export async function getJobFrames(jobId: string, count = 8) {
-  const response = await fetch(`/api/jobs/${jobId}/frames?count=${count}`, {
-    method: "GET",
-    cache: "no-store"
-  });
+  const response = await fetchWithTimeout(
+    `/api/jobs/${jobId}/frames?count=${count}`,
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
 
   if (!response.ok) {
     await handleError(response);
@@ -201,7 +245,7 @@ export async function getJobFrames(jobId: string, count = 8) {
 }
 
 export async function listJobFrames(jobId: string) {
-  const response = await fetch(`/api/jobs/${jobId}/frames/list`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/frames/list`, {
     method: "GET",
     cache: "no-store"
   });
@@ -224,7 +268,7 @@ export async function saveJobSelection(
     };
   }
 ) {
-  const response = await fetch(`/api/jobs/${jobId}/selection`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/selection`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
@@ -239,7 +283,7 @@ export async function saveJobSelection(
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
-  const response = await fetch(`/api/jobs/${jobId}/player-ref`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/player-ref`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
@@ -266,7 +310,7 @@ export async function saveJobTargetSelection(
       h: selection.h
     }))
   };
-  const response = await fetch(`/api/jobs/${jobId}/target`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/target`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
@@ -281,7 +325,7 @@ export async function saveJobTargetSelection(
 }
 
 export async function confirmJobSelection(jobId: string) {
-  const response = await fetch(`/api/jobs/${jobId}/confirm-selection`, {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/confirm-selection`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store"
