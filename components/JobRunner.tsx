@@ -13,12 +13,12 @@ import {
   createJob,
   enqueueJob,
   getJob,
-  listJobFrames,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameSelection,
   type JobResponse,
   type JobFrame,
+  type JobFrameListResponse,
   type PreviewFrame,
   type TargetSelection
 } from "@/lib/api";
@@ -26,6 +26,60 @@ import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
+const POLLING_TIMEOUT_MS = 12000;
+
+const buildHttpErrorMessage = async (response: Response) => {
+  let message = "";
+
+  try {
+    const data = (await response.clone().json()) as
+      | { error?: string; detail?: string; message?: string }
+      | undefined;
+    if (data) {
+      message = data.error ?? data.detail ?? data.message ?? "";
+    }
+  } catch {
+    // ignore json parse errors
+  }
+
+  if (!message) {
+    try {
+      message = await response.text();
+    } catch {
+      // ignore text parse errors
+    }
+  }
+
+  const prefix = response.status ? `HTTP ${response.status}` : "Request failed";
+  return message ? `${prefix}: ${message}` : prefix;
+};
+
+const fetchJsonWithTimeout = async <T,>(input: RequestInfo | URL) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), POLLING_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(input, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const message = await buildHttpErrorMessage(response);
+      throw new Error(message);
+    }
+
+    return (await response.json()) as T;
+  } catch (fetchError) {
+    if (fetchError instanceof Error && fetchError.name === "AbortError") {
+      throw new Error("Request timed out");
+    }
+    throw fetchError;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
 
 const statusStyles: Record<string, string> = {
   QUEUED: "bg-slate-800 text-slate-200",
@@ -138,7 +192,7 @@ export default function JobRunner() {
 
     const interval = setInterval(async () => {
       try {
-        const data = await getJob(jobId);
+        const data = await fetchJsonWithTimeout<JobResponse>(`/api/jobs/${jobId}`);
         setJob(data);
 
         if (data.status === "COMPLETED" || data.status === "FAILED") {
@@ -146,6 +200,7 @@ export default function JobRunner() {
           setPolling(false);
         }
       } catch (pollError) {
+        clearInterval(interval);
         setError((pollError as Error).message);
         setPolling(false);
       }
@@ -240,7 +295,9 @@ export default function JobRunner() {
     const interval = setInterval(async () => {
       try {
         attempts += 1;
-        const response = await listJobFrames(jobId);
+        const response = await fetchJsonWithTimeout<JobFrameListResponse>(
+          `/api/jobs/${jobId}/frames/list`
+        );
         const items = response.items ?? [];
 
         if (!isMounted) {
