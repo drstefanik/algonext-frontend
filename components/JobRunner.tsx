@@ -330,7 +330,8 @@ export default function JobRunner() {
         shirt_number: Number(shirtNumber),
         team_name: teamName.trim()
       });
-      setJobId(response.jobId);
+      const nextJobId = response.jobId ?? null;
+      setJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
       setSelectedPreviewFrame(null);
