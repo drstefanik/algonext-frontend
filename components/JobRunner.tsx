@@ -54,6 +54,20 @@ const buildHttpErrorMessage = async (response: Response) => {
   return message ? `${prefix}: ${message}` : prefix;
 };
 
+const toErrorMessage = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
 const fetchJsonWithTimeout = async <T,>(input: RequestInfo | URL) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), POLLING_TIMEOUT_MS);
@@ -201,7 +215,7 @@ export default function JobRunner() {
         }
       } catch (pollError) {
         clearInterval(interval);
-        setError((pollError as Error).message);
+        setError(toErrorMessage(pollError));
         setPolling(false);
       }
     }, 2000);
@@ -225,7 +239,7 @@ export default function JobRunner() {
         }
       } catch (fetchError) {
         if (isMounted) {
-          setError((fetchError as Error).message);
+          setError(toErrorMessage(fetchError));
         }
       }
     };
@@ -348,7 +362,7 @@ export default function JobRunner() {
         if (!isMounted) {
           return;
         }
-        setPreviewPollingError((pollError as Error).message);
+        setPreviewPollingError(toErrorMessage(pollError));
         setPreviewPollingActive(false);
         clearInterval(interval);
       }
@@ -395,7 +409,7 @@ export default function JobRunner() {
       setPlayerRefSelection(null);
       setPlayerRefError(null);
     } catch (createError) {
-      setError((createError as Error).message);
+      setError(toErrorMessage(createError));
     } finally {
       setSubmitting(false);
     }
@@ -412,7 +426,7 @@ export default function JobRunner() {
       setJob(response);
       setPolling(true);
     } catch (enqueueError) {
-      setError((enqueueError as Error).message);
+      setError(toErrorMessage(enqueueError));
     } finally {
       setSubmitting(false);
     }
@@ -433,7 +447,7 @@ export default function JobRunner() {
       setJob(updatedJob);
       setPolling(true);
     } catch (saveError) {
-      setSelectionError((saveError as Error).message);
+      setSelectionError(toErrorMessage(saveError));
     } finally {
       setSavingSelection(false);
     }
@@ -578,7 +592,7 @@ export default function JobRunner() {
       setJob(updatedJob);
       handleClosePreview();
     } catch (saveError) {
-      setPlayerRefError((saveError as Error).message);
+      setPlayerRefError(toErrorMessage(saveError));
     } finally {
       setSavingPlayerRef(false);
     }
@@ -598,7 +612,7 @@ export default function JobRunner() {
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
     } catch (refreshError) {
-      setError((refreshError as Error).message);
+      setError(toErrorMessage(refreshError));
     } finally {
       setRefreshingFrames(false);
     }
