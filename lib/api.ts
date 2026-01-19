@@ -190,10 +190,10 @@ export async function createJob(payload: CreateJobPayload) {
         data?: { id?: string; job_id?: string; jobId?: string; status?: JobStatus };
       };
   const jobId =
-    "job_id" in data
-      ? data.job_id ?? data.jobId
-      : data.data?.job_id ?? data.data?.jobId ?? data.data?.id;
-  const status = "status" in data ? data.status : data.data?.status;
+    "data" in data
+      ? data.data?.job_id ?? data.data?.jobId ?? data.data?.id
+      : data.job_id ?? data.jobId;
+  const status = "data" in data ? data.data?.status : data.status;
   return { jobId, status };
 }
 
