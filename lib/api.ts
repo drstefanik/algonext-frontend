@@ -183,17 +183,19 @@ export async function createJob(payload: CreateJobPayload) {
     await handleError(response);
   }
 
-  const data = (await response.json()) as
-    | { job_id?: string; status?: JobStatus; jobId?: string }
-    | {
-        ok?: boolean;
-        data?: { id?: string; job_id?: string; jobId?: string; status?: JobStatus };
-      };
-  const jobId =
-    "data" in data
-      ? data.data?.job_id ?? data.data?.jobId ?? data.data?.id
-      : data.job_id ?? data.jobId;
-  const status = "data" in data ? data.data?.status : data.status;
+  const payload = (await response.json()) as unknown;
+  const normalized =
+    payload && typeof payload === "object" && "data" in payload
+      ? (payload as { data?: unknown }).data
+      : payload;
+  const normalizedRecord = (normalized ?? {}) as {
+    id?: string;
+    job_id?: string;
+    jobId?: string;
+    status?: JobStatus;
+  };
+  const jobId = normalizedRecord.job_id ?? normalizedRecord.jobId ?? normalizedRecord.id;
+  const status = normalizedRecord.status;
   return { jobId, status };
 }
 
