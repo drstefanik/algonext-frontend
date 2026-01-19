@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent
+} from "react";
 import {
   confirmJobSelection,
   createJob,
@@ -73,6 +80,9 @@ export default function JobRunner() {
   const [previewPollingActive, setPreviewPollingActive] = useState(false);
   const [previewPollingAttempt, setPreviewPollingAttempt] = useState(0);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const previewModalRef = useRef<HTMLDivElement | null>(null);
+  const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const playerSectionRef = useRef<HTMLElement | null>(null);
   const targetSectionRef = useRef<HTMLDivElement | null>(null);
 
@@ -128,11 +138,7 @@ export default function JobRunner() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/jobs/${jobId}`, {
-          cache: "no-store"
-        });
-        const data = (await res.json()) as JobResponse;
-
+        const data = await getJob(jobId);
         setJob(data);
 
         if (data.status === "COMPLETED" || data.status === "FAILED") {
@@ -203,6 +209,17 @@ export default function JobRunner() {
       setPreviewPollingActive(false);
     }
   }, [jobId, jobPreviewFrames]);
+
+  useEffect(() => {
+    if (selectedPreviewFrame) {
+      lastFocusedElementRef.current = document.activeElement as HTMLElement;
+      requestAnimationFrame(() => {
+        previewCloseButtonRef.current?.focus();
+      });
+    } else {
+      lastFocusedElementRef.current?.focus();
+    }
+  }, [selectedPreviewFrame]);
 
   useEffect(() => {
     if (!jobId || !isExtractingPreviews || previewFrames.length > 0) {
@@ -452,6 +469,43 @@ export default function JobRunner() {
       }
     }
     setPreviewDragState(null);
+  };
+
+  const handlePreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleClosePreview();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const modal = previewModalRef.current;
+    if (!modal) {
+      return;
+    }
+    const focusable = Array.from(
+      modal.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => !element.hasAttribute("disabled"));
+    if (focusable.length === 0) {
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const isShift = event.shiftKey;
+    const activeElement = document.activeElement as HTMLElement | null;
+
+    if (isShift && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!isShift && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   const handleSavePlayerRef = async () => {
@@ -952,19 +1006,34 @@ export default function JobRunner() {
 
       {selectedPreviewFrame ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
-          <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
+          <div
+            ref={previewModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="preview-modal-title"
+            aria-describedby="preview-modal-description"
+            className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl"
+            onKeyDown={handlePreviewKeyDown}
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold text-white">
+                <h3
+                  id="preview-modal-title"
+                  className="text-lg font-semibold text-white"
+                >
                   {previewMode === "target" ? "Draw target box" : "Draw player box"}
                 </h3>
-                <p className="mt-1 text-sm text-slate-400">
+                <p
+                  id="preview-modal-description"
+                  className="mt-1 text-sm text-slate-400"
+                >
                   {previewMode === "target"
                     ? "Drag to mark the target in the selected frame."
                     : "Drag to mark the player in the selected frame."}
                 </p>
               </div>
               <button
+                ref={previewCloseButtonRef}
                 type="button"
                 onClick={handleClosePreview}
                 className="rounded-lg border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
