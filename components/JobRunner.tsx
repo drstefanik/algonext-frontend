@@ -108,20 +108,21 @@ const extractNestedErrorMessage = (error: unknown) => {
 };
 
 const toErrorMessage = (error: unknown) => {
+  const nestedMessage = extractNestedErrorMessage(error);
+  if (nestedMessage) {
+    return nestedMessage;
+  }
   if (error instanceof Error) {
     return error.message;
   }
   if (typeof error === "string") {
     return error;
   }
-  const nestedMessage = extractNestedErrorMessage(error);
-  if (nestedMessage) {
-    return nestedMessage;
-  }
   try {
-    return JSON.stringify(error);
+    const serialized = JSON.stringify(error);
+    return serialized ?? "Unexpected error";
   } catch {
-    return String(error);
+    return "Unexpected error";
   }
 };
 
@@ -742,7 +743,7 @@ export default function JobRunner() {
 
         <div className="mt-6 space-y-4">
           <label className="block text-sm text-slate-300">
-            Video URL or Video Key
+            Video URL (http/https) or MinIO Object Key
             <textarea
               value={videoUrl}
               onChange={(event) => setVideoUrl(event.target.value)}
