@@ -55,6 +55,7 @@ export type JobClip = {
 export type PreviewFrame = {
   timeSec: number;
   key: string;
+  url?: string;
   signedUrl: string;
   width?: number | null;
   height?: number | null;
@@ -129,6 +130,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
   const key = frame.key ?? `frame-${timeSec}`;
+  const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
   const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
@@ -137,6 +139,7 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
     ...frame,
     timeSec,
     key,
+    url,
     signedUrl,
     width,
     height
@@ -322,16 +325,20 @@ export async function getJobFrames(jobId: string, count = 8) {
 }
 
 export async function listJobFrames(jobId: string) {
-  const response = await fetchWithTimeout(`/api/jobs/${jobId}/frames/list`, {
+  const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/frames/list`, {
     method: "GET",
     cache: "no-store"
   });
 
-  if (!response.ok) {
-    await handleError(response);
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok || !data?.ok) {
+    const msg =
+      data?.error?.message || data?.error || `Frames list failed (${res.status})`;
+    throw new Error(msg);
   }
 
-  return (await response.json()) as JobFrameListResponse;
+  return data.data?.items ?? [];
 }
 
 export async function saveJobSelection(

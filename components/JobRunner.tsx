@@ -13,13 +13,13 @@ import {
   createJob,
   enqueueJob,
   getJob,
+  listJobFrames,
   normalizeJob,
   normalizePreviewFrames,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameSelection,
   type JobResponse,
-  type JobFrameListResponse,
   type PreviewFrame,
   type TargetSelection
 } from "@/lib/api";
@@ -204,6 +204,7 @@ export default function JobRunner() {
   const [previewPollingError, setPreviewPollingError] = useState<string | null>(
     null
   );
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewImageErrors, setPreviewImageErrors] = useState<Record<string, string>>(
     {}
   );
@@ -260,20 +261,18 @@ export default function JobRunner() {
         left: Math.min(previewDragState.startX, previewDragState.currentX),
         top: Math.min(previewDragState.startY, previewDragState.currentY),
         width: Math.abs(previewDragState.currentX - previewDragState.startX),
-      height: Math.abs(previewDragState.currentY - previewDragState.startY)
+        height: Math.abs(previewDragState.currentY - previewDragState.startY)
       }
     : null;
 
   const getPreviewFrameSrc = (frame: PreviewFrame) =>
-    frame.signedUrl
-      ? `/api/frame-proxy?url=${encodeURIComponent(frame.signedUrl)}`
-      : "";
+    frame.url ?? frame.signedUrl ?? "";
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
     console.error("FRAME_IMG_ERROR", {
       context,
       key: frame.key,
-      url: frame.signedUrl
+      url: frame.url ?? frame.signedUrl
     });
     setPreviewImageErrors((prev) => ({
       ...prev,
@@ -364,6 +363,7 @@ export default function JobRunner() {
       setPreviewPollingActive(false);
       setPreviewPollingAttempt(0);
       setPreviewImageErrors({});
+      setPreviewError(null);
       return;
     }
 
@@ -372,8 +372,47 @@ export default function JobRunner() {
       setPreviewPollingError(null);
       setPreviewPollingActive(false);
       setPreviewImageErrors({});
+      setPreviewError(null);
     }
   }, [jobId, jobPreviewFrames]);
+
+  useEffect(() => {
+    if (!jobId) {
+      return;
+    }
+
+    const step = job?.progress?.step;
+    const alreadyHaveFrames = previewFrames.length > 0;
+
+    if (step !== "PREVIEWS_READY" || alreadyHaveFrames) {
+      return;
+    }
+
+    let isMounted = true;
+
+    listJobFrames(jobId)
+      .then((items) => {
+        if (!isMounted) {
+          return;
+        }
+        const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
+          ...frame,
+          key: frame.key ?? `frame-${frame.timeSec}-${index}`
+        }));
+        setPreviewFrames(mappedFrames);
+        setPreviewError(null);
+      })
+      .catch((fetchError) => {
+        if (!isMounted) {
+          return;
+        }
+        setPreviewError(String(fetchError?.message || fetchError));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [job?.progress?.step, jobId, previewFrames.length]);
 
   useEffect(() => {
     console.log("PREVIEW_DEBUG", {
@@ -423,10 +462,7 @@ export default function JobRunner() {
     const interval = setInterval(async () => {
       try {
         attempts += 1;
-        const response = await fetchJsonWithTimeout<JobFrameListResponse>(
-          `/api/jobs/${jobId}/frames/list`
-        );
-        const items = response.items ?? [];
+        const items = await listJobFrames(jobId);
 
         if (!isMounted) {
           return;
@@ -440,6 +476,7 @@ export default function JobRunner() {
           setPreviewFrames(mappedFrames);
           setPreviewPollingActive(false);
           setPreviewPollingError(null);
+          setPreviewError(null);
           clearInterval(interval);
           return;
         }
@@ -906,7 +943,9 @@ export default function JobRunner() {
               <span>Status: {job?.status ?? "—"}</span>
               <span>Step: {job?.progress?.step ?? "—"}</span>
               <span>Frames (payload): {job?.result?.previewFrames?.length ?? 0}</span>
+              <span>Frames (list): {previewFrames.length}</span>
               <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
+              <span>Frames error: {previewError || "—"}</span>
               <span>Image errors: {previewImageErrorCount}</span>
             </div>
           </div>
