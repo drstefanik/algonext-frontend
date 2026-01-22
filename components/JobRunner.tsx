@@ -171,6 +171,24 @@ type PreviewDragState = {
 
 type PreviewMode = "player-ref" | "target";
 
+const mapPreviewFramesFromSnakeCase = (frames: Array<PreviewFrame | any>) =>
+  frames.map((frame, index) => {
+    const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
+    const key = frame.key ?? `frame-${timeSec}-${index}`;
+    const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
+    const width = frame.width ?? frame.w ?? null;
+    const height = frame.height ?? frame.h ?? null;
+
+    return {
+      ...frame,
+      timeSec,
+      key,
+      signedUrl,
+      width,
+      height
+    };
+  });
+
 export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
@@ -231,7 +249,11 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const jobPreviewFrames = job?.result?.previewFrames ?? [];
+  const jobPreviewFrames =
+    job?.result?.previewFrames ??
+    mapPreviewFramesFromSnakeCase(
+      (job?.result as { preview_frames?: PreviewFrame[] })?.preview_frames ?? []
+    );
   const resolvedPreviewFrames =
     previewFrames.length > 0 ? previewFrames : jobPreviewFrames;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;

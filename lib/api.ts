@@ -118,11 +118,49 @@ export type JobTarget = {
   [key: string]: any;
 };
 
+type UnknownRecord = Record<string, any>;
+
 const jsonHeaders = {
   "Content-Type": "application/json"
 };
 
 const DEFAULT_TIMEOUT_MS = 15000;
+
+const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
+  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
+  const key = frame.key ?? `frame-${timeSec}`;
+  const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
+  const width = frame.width ?? frame.w ?? null;
+  const height = frame.height ?? frame.h ?? null;
+
+  return {
+    ...frame,
+    timeSec,
+    key,
+    signedUrl,
+    width,
+    height
+  };
+};
+
+const mapJobResponse = (job: UnknownRecord): JobResponse => {
+  const result = job.result as UnknownRecord | undefined;
+  const previewFramesSource =
+    result?.previewFrames ?? result?.preview_frames ?? job.preview_frames ?? [];
+  const previewFrames = Array.isArray(previewFramesSource)
+    ? previewFramesSource.map(mapPreviewFrame)
+    : [];
+
+  return {
+    ...job,
+    result: result
+      ? {
+          ...result,
+          previewFrames
+        }
+      : result
+  };
+};
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -242,7 +280,14 @@ export async function getJob(jobId: string) {
     await handleError(response);
   }
 
-  return (await response.json()) as JobResponse;
+  const payload = (await response.json()) as UnknownRecord;
+  const normalized =
+    payload && typeof payload === "object" && "data" in payload
+      ? (payload as { data?: UnknownRecord }).data ?? {}
+      : payload;
+  const mapped = mapJobResponse(normalized ?? {});
+  console.log("Mapped job response", mapped);
+  return mapped;
 }
 
 export async function getJobStatus(jobId: string) {
