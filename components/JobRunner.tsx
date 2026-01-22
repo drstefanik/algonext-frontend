@@ -13,11 +13,12 @@ import {
   createJob,
   enqueueJob,
   getJob,
+  normalizeJob,
+  normalizePreviewFrames,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameSelection,
   type JobResponse,
-  type JobFrame,
   type JobFrameListResponse,
   type PreviewFrame,
   type TargetSelection
@@ -171,24 +172,6 @@ type PreviewDragState = {
 
 type PreviewMode = "player-ref" | "target";
 
-const mapPreviewFramesFromSnakeCase = (frames: Array<PreviewFrame | any>) =>
-  frames.map((frame, index) => {
-    const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
-    const key = frame.key ?? `frame-${timeSec}-${index}`;
-    const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
-    const width = frame.width ?? frame.w ?? null;
-    const height = frame.height ?? frame.h ?? null;
-
-    return {
-      ...frame,
-      timeSec,
-      key,
-      signedUrl,
-      width,
-      height
-    };
-  });
-
 export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
@@ -249,11 +232,7 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const jobPreviewFrames =
-    job?.result?.previewFrames ??
-    mapPreviewFramesFromSnakeCase(
-      (job?.result as { preview_frames?: PreviewFrame[] })?.preview_frames ?? []
-    );
+  const jobPreviewFrames = job?.result?.previewFrames ?? [];
   const resolvedPreviewFrames =
     previewFrames.length > 0 ? previewFrames : jobPreviewFrames;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
@@ -287,9 +266,10 @@ export default function JobRunner() {
     const interval = setInterval(async () => {
       try {
         const data = await fetchJsonWithTimeout<JobResponse>(`/api/jobs/${jobId}`);
-        setJob(data);
+        const normalizedJob = normalizeJob(data);
+        setJob(normalizedJob);
 
-        if (data.status === "COMPLETED" || data.status === "FAILED") {
+        if (normalizedJob.status === "COMPLETED" || normalizedJob.status === "FAILED") {
           clearInterval(interval);
           setPolling(false);
         }
@@ -399,33 +379,10 @@ export default function JobRunner() {
         }
 
         if (items.length > 0) {
-          const mappedFrames = items.map((frame, index) => {
-            const timeSec =
-              (frame as JobFrame & { time_sec?: number; timeSec?: number }).t ??
-              (frame as JobFrame & { time_sec?: number; timeSec?: number })
-                .time_sec ??
-              (frame as JobFrame & { time_sec?: number; timeSec?: number }).timeSec ??
-              0;
-            const key =
-              (frame as JobFrame & { key?: string }).key ??
-              `frame-${timeSec}-${index}`;
-            const signedUrl =
-              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
-                .url ??
-              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
-                .signedUrl ??
-              (frame as JobFrame & { signedUrl?: string; signed_url?: string })
-                .signed_url ??
-              "";
-
-            return {
-              timeSec,
-              key,
-              signedUrl,
-              width: frame.w ?? null,
-              height: frame.h ?? null
-            };
-          });
+          const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
+            ...frame,
+            key: frame.key ?? `frame-${frame.timeSec}-${index}`
+          }));
           setPreviewFrames(mappedFrames);
           setPreviewPollingActive(false);
           setPreviewPollingError(null);
@@ -507,7 +464,7 @@ export default function JobRunner() {
     setSubmitting(true);
     try {
       const response = await enqueueJob(jobId);
-      setJob(response);
+      setJob(normalizeJob(response));
       setPolling(true);
     } catch (enqueueError) {
       setError(toErrorMessage(enqueueError));
@@ -886,6 +843,16 @@ export default function JobRunner() {
         </div>
 
         <div className="mt-6 space-y-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
+              Preview debug
+            </p>
+            <div className="mt-2 grid gap-1">
+              <span>Status: {job?.status ?? "—"}</span>
+              <span>Step: {job?.progress?.step ?? "—"}</span>
+              <span>Frames: {job?.result?.previewFrames?.length ?? 0}</span>
+            </div>
+          </div>
           {shouldSelectPlayer ? (
             <>
               <p className="text-sm text-slate-400">
@@ -903,6 +870,9 @@ export default function JobRunner() {
                       src={frame.signedUrl}
                       alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
                       className="h-32 w-full object-cover"
+                      onError={() =>
+                        console.error("FRAME_IMG_ERROR", frame.key, frame.signedUrl)
+                      }
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
@@ -1107,6 +1077,9 @@ export default function JobRunner() {
                           src={frame.signedUrl}
                           alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
                           className="h-36 w-full object-cover"
+                          onError={() =>
+                            console.error("FRAME_IMG_ERROR", frame.key, frame.signedUrl)
+                          }
                         />
                         {isSelected && targetSelection ? (
                           <div className="pointer-events-none absolute inset-0">
@@ -1211,6 +1184,13 @@ export default function JobRunner() {
                 alt={`Preview frame at ${selectedPreviewFrame.timeSec.toFixed(2)}s`}
                 className="h-auto w-full select-none"
                 draggable={false}
+                onError={() =>
+                  console.error(
+                    "FRAME_IMG_ERROR",
+                    selectedPreviewFrame.key,
+                    selectedPreviewFrame.signedUrl
+                  )
+                }
               />
               <div className="pointer-events-none absolute inset-0">
                 {previewMode === "player-ref" && playerRefSelection ? (

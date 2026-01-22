@@ -143,13 +143,19 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   };
 };
 
+export const normalizePreviewFrames = (frames: unknown): PreviewFrame[] => {
+  if (!Array.isArray(frames)) {
+    return [];
+  }
+
+  return frames.map(mapPreviewFrame).filter((frame) => Boolean(frame.signedUrl));
+};
+
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
   const result = job.result as UnknownRecord | undefined;
   const previewFramesSource =
     result?.previewFrames ?? result?.preview_frames ?? job.preview_frames ?? [];
-  const previewFrames = Array.isArray(previewFramesSource)
-    ? previewFramesSource.map(mapPreviewFrame)
-    : [];
+  const previewFrames = normalizePreviewFrames(previewFramesSource);
 
   return {
     ...job,
@@ -160,6 +166,14 @@ const mapJobResponse = (job: UnknownRecord): JobResponse => {
         }
       : result
   };
+};
+
+export const normalizeJob = (payload: unknown): JobResponse => {
+  const normalized =
+    payload && typeof payload === "object" && "data" in payload
+      ? (payload as { data?: UnknownRecord }).data ?? {}
+      : (payload as UnknownRecord);
+  return mapJobResponse(normalized ?? {});
 };
 
 async function fetchWithTimeout(
@@ -267,7 +281,8 @@ export async function enqueueJob(jobId: string) {
     await handleError(response);
   }
 
-  return (await response.json()) as JobResponse;
+  const payload = (await response.json()) as UnknownRecord;
+  return normalizeJob(payload);
 }
 
 export async function getJob(jobId: string) {
@@ -281,11 +296,7 @@ export async function getJob(jobId: string) {
   }
 
   const payload = (await response.json()) as UnknownRecord;
-  const normalized =
-    payload && typeof payload === "object" && "data" in payload
-      ? (payload as { data?: UnknownRecord }).data ?? {}
-      : payload;
-  const mapped = mapJobResponse(normalized ?? {});
+  const mapped = normalizeJob(payload);
   console.log("Mapped job response", mapped);
   return mapped;
 }
