@@ -204,6 +204,9 @@ export default function JobRunner() {
   const [previewPollingError, setPreviewPollingError] = useState<string | null>(
     null
   );
+  const [previewImageErrors, setPreviewImageErrors] = useState<Record<string, string>>(
+    {}
+  );
   const [previewPollingActive, setPreviewPollingActive] = useState(false);
   const [previewPollingAttempt, setPreviewPollingAttempt] = useState(0);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
@@ -235,6 +238,9 @@ export default function JobRunner() {
   const jobPreviewFrames = job?.result?.previewFrames ?? [];
   const resolvedPreviewFrames =
     previewFrames.length > 0 ? previewFrames : jobPreviewFrames;
+  const previewImageErrorCount = Object.keys(previewImageErrors).length;
+  const hasPreviewFrameErrors =
+    resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const shouldSelectPlayer = resolvedPreviewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
@@ -254,9 +260,37 @@ export default function JobRunner() {
         left: Math.min(previewDragState.startX, previewDragState.currentX),
         top: Math.min(previewDragState.startY, previewDragState.currentY),
         width: Math.abs(previewDragState.currentX - previewDragState.startX),
-        height: Math.abs(previewDragState.currentY - previewDragState.startY)
+      height: Math.abs(previewDragState.currentY - previewDragState.startY)
       }
     : null;
+
+  const getPreviewFrameSrc = (frame: PreviewFrame) =>
+    frame.signedUrl
+      ? `/api/frame-proxy?url=${encodeURIComponent(frame.signedUrl)}`
+      : "";
+
+  const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
+    console.error("FRAME_IMG_ERROR", {
+      context,
+      key: frame.key,
+      url: frame.signedUrl
+    });
+    setPreviewImageErrors((prev) => ({
+      ...prev,
+      [frame.key]: context
+    }));
+  };
+
+  const handlePreviewImageLoad = (frame: PreviewFrame) => {
+    setPreviewImageErrors((prev) => {
+      if (!prev[frame.key]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[frame.key];
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!jobId || !polling) {
@@ -329,6 +363,7 @@ export default function JobRunner() {
       setPreviewPollingError(null);
       setPreviewPollingActive(false);
       setPreviewPollingAttempt(0);
+      setPreviewImageErrors({});
       return;
     }
 
@@ -336,8 +371,27 @@ export default function JobRunner() {
       setPreviewFrames(jobPreviewFrames);
       setPreviewPollingError(null);
       setPreviewPollingActive(false);
+      setPreviewImageErrors({});
     }
   }, [jobId, jobPreviewFrames]);
+
+  useEffect(() => {
+    console.log("PREVIEW_DEBUG", {
+      status: job?.status ?? null,
+      step: job?.progress?.step ?? null,
+      previewFramesPayload: jobPreviewFrames.length,
+      previewFramesState: previewFrames.length,
+      previewFramesResolved: resolvedPreviewFrames.length,
+      previewImageErrorCount
+    });
+  }, [
+    job?.status,
+    job?.progress?.step,
+    jobPreviewFrames.length,
+    previewFrames.length,
+    resolvedPreviewFrames.length,
+    previewImageErrorCount
+  ]);
 
   useEffect(() => {
     if (selectedPreviewFrame) {
@@ -703,6 +757,7 @@ export default function JobRunner() {
     setPreviewPollingError(null);
     setPreviewPollingActive(false);
     setPreviewPollingAttempt(0);
+    setPreviewImageErrors({});
   };
 
   return (
@@ -850,9 +905,17 @@ export default function JobRunner() {
             <div className="mt-2 grid gap-1">
               <span>Status: {job?.status ?? "—"}</span>
               <span>Step: {job?.progress?.step ?? "—"}</span>
-              <span>Frames: {job?.result?.previewFrames?.length ?? 0}</span>
+              <span>Frames (payload): {job?.result?.previewFrames?.length ?? 0}</span>
+              <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
+              <span>Image errors: {previewImageErrorCount}</span>
             </div>
           </div>
+          {hasPreviewFrameErrors ? (
+            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+              Images blocked or failed to load. Check the frame proxy or mixed
+              content settings.
+            </div>
+          ) : null}
           {shouldSelectPlayer ? (
             <>
               <p className="text-sm text-slate-400">
@@ -866,14 +929,19 @@ export default function JobRunner() {
                     onClick={() => handleOpenPreview(frame, "player-ref")}
                     className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
                   >
-                    <img
-                      src={frame.signedUrl}
-                      alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
-                      className="h-32 w-full object-cover"
-                      onError={() =>
-                        console.error("FRAME_IMG_ERROR", frame.key, frame.signedUrl)
-                      }
-                    />
+                    {previewImageErrors[frame.key] ? (
+                      <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
+                        Image blocked
+                      </div>
+                    ) : (
+                      <img
+                        src={getPreviewFrameSrc(frame)}
+                        alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
+                        className="h-32 w-full object-cover"
+                        onLoad={() => handlePreviewImageLoad(frame)}
+                        onError={() => handlePreviewImageError(frame, "player-grid")}
+                      />
+                    )}
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
                         t={frame.timeSec.toFixed(2)}s
@@ -1023,6 +1091,12 @@ export default function JobRunner() {
                 target player.
               </p>
             </div>
+            {hasPreviewFrameErrors ? (
+              <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                Images blocked or failed to load. Check the frame proxy or mixed
+                content settings.
+              </div>
+            ) : null}
 
             <div className="mt-4 space-y-4">
               {resolvedPreviewFrames.length === 0 ? (
@@ -1073,14 +1147,19 @@ export default function JobRunner() {
                         onClick={() => handleOpenPreview(frame, "target")}
                         className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-amber-300/70"
                       >
-                        <img
-                          src={frame.signedUrl}
-                          alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
-                          className="h-36 w-full object-cover"
-                          onError={() =>
-                            console.error("FRAME_IMG_ERROR", frame.key, frame.signedUrl)
-                          }
-                        />
+                        {previewImageErrors[frame.key] ? (
+                          <div className="flex h-36 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
+                            Image blocked
+                          </div>
+                        ) : (
+                          <img
+                            src={getPreviewFrameSrc(frame)}
+                            alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
+                            className="h-36 w-full object-cover"
+                            onLoad={() => handlePreviewImageLoad(frame)}
+                            onError={() => handlePreviewImageError(frame, "target-grid")}
+                          />
+                        )}
                         {isSelected && targetSelection ? (
                           <div className="pointer-events-none absolute inset-0">
                             <div
@@ -1178,20 +1257,23 @@ export default function JobRunner() {
               onMouseUp={handlePreviewMouseUp}
               onMouseLeave={handlePreviewMouseUp}
             >
-              <img
-                ref={previewImageRef}
-                src={selectedPreviewFrame.signedUrl}
-                alt={`Preview frame at ${selectedPreviewFrame.timeSec.toFixed(2)}s`}
-                className="h-auto w-full select-none"
-                draggable={false}
-                onError={() =>
-                  console.error(
-                    "FRAME_IMG_ERROR",
-                    selectedPreviewFrame.key,
-                    selectedPreviewFrame.signedUrl
-                  )
-                }
-              />
+              {previewImageErrors[selectedPreviewFrame.key] ? (
+                <div className="flex h-72 w-full items-center justify-center text-xs text-slate-400">
+                  Image blocked. Check the frame proxy or mixed content settings.
+                </div>
+              ) : (
+                <img
+                  ref={previewImageRef}
+                  src={getPreviewFrameSrc(selectedPreviewFrame)}
+                  alt={`Preview frame at ${selectedPreviewFrame.timeSec.toFixed(2)}s`}
+                  className="h-auto w-full select-none"
+                  draggable={false}
+                  onLoad={() => handlePreviewImageLoad(selectedPreviewFrame)}
+                  onError={() =>
+                    handlePreviewImageError(selectedPreviewFrame, "preview-modal")
+                  }
+                />
+              )}
               <div className="pointer-events-none absolute inset-0">
                 {previewMode === "player-ref" && playerRefSelection ? (
                   <div
