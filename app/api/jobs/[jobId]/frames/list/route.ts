@@ -1,4 +1,4 @@
-import { forward } from "../../../proxy";
+import { forward } from "../../../../proxy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
