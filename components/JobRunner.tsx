@@ -13,7 +13,7 @@ import {
   createJob,
   enqueueJob,
   getJob,
-  getJobFramesList,
+  listJobFrames,
   normalizeJob,
   normalizePreviewFrames,
   saveJobPlayerRef,
@@ -250,6 +250,9 @@ export default function JobRunner() {
   const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
+  const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
+  const shouldPollFrames =
+    (isPreviewsReady || jobPreviewFrames.length > 0) && Boolean(jobId);
   const showTargetSection =
     isWaitingForTarget || (isExtractingPreviews && resolvedPreviewFrames.length > 0);
   const showPreviewFrameLoader =
@@ -352,10 +355,10 @@ export default function JobRunner() {
   }, [jobTargetSelection]);
 
   useEffect(() => {
-    if (!isExtractingPreviews) {
+    if (!shouldPollFrames) {
       setPreviewPollingActive(false);
     }
-  }, [isExtractingPreviews]);
+  }, [shouldPollFrames]);
 
   useEffect(() => {
     if (!jobId) {
@@ -387,13 +390,13 @@ export default function JobRunner() {
     const requestId = previewListRequestRef.current + 1;
     previewListRequestRef.current = requestId;
 
-    if (jobPreviewFrames.length > 0 || previewFrames.length > 0) {
+    if (!shouldPollFrames || previewFrames.length > 0) {
       return () => {
         isMounted = false;
       };
     }
 
-    getJobFramesList(jobId)
+    listJobFrames(jobId)
       .then((items) => {
         if (!isMounted) {
           return;
@@ -401,11 +404,20 @@ export default function JobRunner() {
         if (previewListRequestRef.current !== requestId) {
           return;
         }
-        const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
-          ...frame,
-          key: frame.key ?? `frame-${frame.timeSec}-${index}`
-        }));
-        setPreviewFrames(mappedFrames);
+        if (items.length > 0) {
+          const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
+            ...frame,
+            key: frame.key ?? `frame-${frame.timeSec}-${index}`
+          }));
+          setPreviewFrames(mappedFrames);
+        } else if (jobPreviewFrames.length > 0) {
+          setPreviewFrames(
+            normalizePreviewFrames(jobPreviewFrames).map((frame, index) => ({
+              ...frame,
+              key: frame.key ?? `frame-${frame.timeSec}-${index}`
+            }))
+          );
+        }
         setPreviewError(null);
       })
       .catch((fetchError) => {
@@ -421,7 +433,14 @@ export default function JobRunner() {
     return () => {
       isMounted = false;
     };
-  }, [jobId, jobPreviewFrames.length, previewFrames.length, job?.updatedAt, job?.progress?.updatedAt]);
+  }, [
+    jobId,
+    jobPreviewFrames,
+    previewFrames.length,
+    job?.updatedAt,
+    job?.progress?.updatedAt,
+    shouldPollFrames
+  ]);
 
   useEffect(() => {
     console.log("PREVIEW_DEBUG", {
@@ -455,9 +474,8 @@ export default function JobRunner() {
   useEffect(() => {
     if (
       !jobId ||
-      !isExtractingPreviews ||
-      previewFrames.length > 0 ||
-      jobPreviewFrames.length > 0
+      !shouldPollFrames ||
+      previewFrames.length > 0
     ) {
       return;
     }
@@ -476,7 +494,7 @@ export default function JobRunner() {
     const interval = setInterval(async () => {
       try {
         attempts += 1;
-        const items = await getJobFramesList(jobId);
+        const items = await listJobFrames(jobId);
 
         if (!isMounted) {
           return;
@@ -488,6 +506,21 @@ export default function JobRunner() {
             key: frame.key ?? `frame-${frame.timeSec}-${index}`
           }));
           setPreviewFrames(mappedFrames);
+          setPreviewPollingActive(false);
+          setPreviewPollingError(null);
+          setPreviewError(null);
+          clearInterval(interval);
+          return;
+        }
+
+        if (jobPreviewFrames.length > 0) {
+          const fallbackFrames = normalizePreviewFrames(jobPreviewFrames).map(
+            (frame, index) => ({
+              ...frame,
+              key: frame.key ?? `frame-${frame.timeSec}-${index}`
+            })
+          );
+          setPreviewFrames(fallbackFrames);
           setPreviewPollingActive(false);
           setPreviewPollingError(null);
           setPreviewError(null);
@@ -516,8 +549,8 @@ export default function JobRunner() {
     };
   }, [
     jobId,
-    isExtractingPreviews,
-    jobPreviewFrames.length,
+    shouldPollFrames,
+    jobPreviewFrames,
     previewFrames.length,
     previewPollingError,
     previewPollingActive,

@@ -356,7 +356,7 @@ export async function getJobFrames(jobId: string, count = 8) {
   return (await response.json()) as { frames: JobFrame[] };
 }
 
-export async function getJobFramesList(jobId: string) {
+export async function listJobFrames(jobId: string) {
   const response = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/frames/list`, {
     method: "GET",
     cache: "no-store"
@@ -379,9 +379,17 @@ export async function getJobFramesList(jobId: string) {
 
   const itemsSource = Array.isArray(payload)
     ? payload
-    : payload?.items ?? payload?.data?.items ?? payload?.data ?? payload?.frames ?? [];
+    : payload?.data?.items ??
+      payload?.items ??
+      payload?.data ??
+      payload?.frames ??
+      [];
 
   return normalizeFrameListItems(itemsSource);
+}
+
+export async function getJobFramesList(jobId: string) {
+  return listJobFrames(jobId);
 }
 
 export async function saveJobSelection(
