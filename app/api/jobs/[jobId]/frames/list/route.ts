@@ -1,9 +1,5 @@
-import { forward } from "../../../../proxy";
-
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-const API_BASE_URL = process.env.API_BASE_URL;
 
 type RouteContext = {
   params: {
@@ -11,28 +7,26 @@ type RouteContext = {
   };
 };
 
-async function proxyRequest(request: Request, targetUrl: string) {
-  if (!API_BASE_URL) {
-    return new Response(
-      JSON.stringify({ error: "Missing API_BASE_URL environment variable." }),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          "cache-control": "no-store"
-        }
-      }
+export async function GET(
+  request: Request,
+  { params }: RouteContext
+) {
+  const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
+  if (!base) {
+    return Response.json(
+      { ok: false, error: "API_BASE_URL missing" },
+      { status: 500 }
     );
   }
 
-  return forward(request, targetUrl, { includeBody: false });
-}
-
-export async function GET(request: Request, context: RouteContext) {
-  const { jobId } = context.params;
   const { search } = new URL(request.url);
-  const targetUrl = `${API_BASE_URL}/jobs/${encodeURIComponent(
-    jobId
-  )}/frames/list${search}`;
-  return proxyRequest(request, targetUrl);
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
+
+  const upstream = await fetch(url, { cache: "no-store" });
+  const text = await upstream.text();
+
+  return new Response(text, {
+    status: upstream.status,
+    headers: { "content-type": "application/json" }
+  });
 }
