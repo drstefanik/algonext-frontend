@@ -377,13 +377,7 @@ export async function listJobFrames(jobId: string) {
     throw new Error(msg);
   }
 
-  const itemsSource = Array.isArray(payload)
-    ? payload
-    : payload?.data?.items ??
-      payload?.items ??
-      payload?.data ??
-      payload?.frames ??
-      [];
+  const itemsSource = payload?.data?.items ?? [];
 
   return normalizeFrameListItems(itemsSource);
 }
