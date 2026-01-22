@@ -30,6 +30,7 @@ export type JobProgress = {
   pct?: number;
   step?: string;
   message?: string;
+  updatedAt?: string;
 };
 
 export type JobResultSummary = {
@@ -77,6 +78,7 @@ export type JobResponse = {
   jobId?: string;
   status?: JobStatus;
   progress?: JobProgress;
+  previewFrames?: PreviewFrame[];
   result?: JobResult;
   playerRef?: FrameSelection;
   target?: JobTarget;
@@ -146,6 +148,24 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   };
 };
 
+const mapFrameListItem = (frame: UnknownRecord): PreviewFrame => {
+  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
+  const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec}`;
+  const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
+  const width = frame.width ?? frame.w ?? null;
+  const height = frame.height ?? frame.h ?? null;
+
+  return {
+    ...frame,
+    key,
+    timeSec,
+    url,
+    signedUrl: url,
+    width,
+    height
+  };
+};
+
 export const normalizePreviewFrames = (frames: unknown): PreviewFrame[] => {
   if (!Array.isArray(frames)) {
     return [];
@@ -154,10 +174,22 @@ export const normalizePreviewFrames = (frames: unknown): PreviewFrame[] => {
   return frames.map(mapPreviewFrame).filter((frame) => Boolean(frame.signedUrl));
 };
 
+const normalizeFrameListItems = (frames: unknown): PreviewFrame[] => {
+  if (!Array.isArray(frames)) {
+    return [];
+  }
+
+  return frames.map(mapFrameListItem).filter((frame) => Boolean(frame.url));
+};
+
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
   const result = job.result as UnknownRecord | undefined;
   const previewFramesSource =
-    result?.previewFrames ?? result?.preview_frames ?? job.preview_frames ?? [];
+    result?.previewFrames ??
+    result?.preview_frames ??
+    job.previewFrames ??
+    job.preview_frames ??
+    [];
   const previewFrames = normalizePreviewFrames(previewFramesSource);
 
   return {
@@ -324,21 +356,32 @@ export async function getJobFrames(jobId: string, count = 8) {
   return (await response.json()) as { frames: JobFrame[] };
 }
 
-export async function listJobFrames(jobId: string) {
-  const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/frames/list`, {
+export async function getJobFramesList(jobId: string) {
+  const response = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/frames/list`, {
     method: "GET",
     cache: "no-store"
   });
 
-  const data = await res.json().catch(() => null);
+  if (!response.ok) {
+    await handleError(response);
+  }
 
-  if (!res.ok || !data?.ok) {
+  const payload = await response.json().catch(() => null);
+
+  if (payload?.ok === false) {
     const msg =
-      data?.error?.message || data?.error || `Frames list failed (${res.status})`;
+      payload?.error?.message ||
+      payload?.error ||
+      payload?.message ||
+      "Frames list failed";
     throw new Error(msg);
   }
 
-  return data.data?.items ?? [];
+  const itemsSource = Array.isArray(payload)
+    ? payload
+    : payload?.items ?? payload?.data?.items ?? payload?.data ?? payload?.frames ?? [];
+
+  return normalizeFrameListItems(itemsSource);
 }
 
 export async function saveJobSelection(

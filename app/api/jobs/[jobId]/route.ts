@@ -54,9 +54,20 @@ type UnknownRecord = Record<string, any>;
 
 const mapPreviewFrame = (frame: UnknownRecord) => ({
   ...frame,
-  timeSec: frame.time_sec ?? frame.timeSec,
-  signedUrl: frame.signed_url ?? frame.signedUrl
+  key: frame.key ?? frame.s3_key ?? frame.s3Key ?? frame.frame_key ?? frame.frameKey,
+  width: frame.width ?? frame.w ?? frame.frame_width ?? frame.frameWidth,
+  height: frame.height ?? frame.h ?? frame.frame_height ?? frame.frameHeight,
+  timeSec: frame.time_sec ?? frame.timeSec ?? frame.t ?? frame.frame_time_sec,
+  signedUrl: frame.signed_url ?? frame.signedUrl ?? frame.url
 });
+
+const mapProgress = (progress?: UnknownRecord) =>
+  progress
+    ? {
+        ...progress,
+        updatedAt: progress.updated_at ?? progress.updatedAt
+      }
+    : progress;
 
 const mapSummary = (summary?: UnknownRecord) =>
   summary
@@ -99,33 +110,43 @@ const mapTargetSelection = (selection: UnknownRecord) => ({
 const mapJobResponse = (job: UnknownRecord) => {
   const result = job.result as UnknownRecord | undefined;
   const target = job.target as UnknownRecord | undefined;
+  const previewFramesSource =
+    job.preview_frames ?? job.previewFrames ?? result?.preview_frames ?? result?.previewFrames;
 
   return {
-    ...job,
-    jobId: job.job_id ?? job.jobId,
-    playerRef: job.player_ref ?? job.playerRef,
-    createdAt: job.created_at ?? job.createdAt,
-    updatedAt: job.updated_at ?? job.updatedAt,
-    videoUrl: job.video_url ?? job.videoUrl,
-    teamName: job.team_name ?? job.teamName,
-    result: result
-      ? {
-          ...result,
-          previewFrames: (result.preview_frames ?? result.previewFrames ?? []).map(
-            mapPreviewFrame
-          ),
-          playerRef: result.player_ref ?? result.playerRef,
-          summary: mapSummary(result.summary),
-          assets: mapAssets(result.assets),
-          clips: (result.clips ?? []).map(mapClip)
-        }
-      : result,
-    target: target
-      ? {
-          ...target,
-          selections: (target.selections ?? []).map(mapTargetSelection)
-        }
-      : target
+    ok: true,
+    data: {
+      ...job,
+      jobId: job.job_id ?? job.jobId,
+      playerRef: job.player_ref ?? job.playerRef,
+      createdAt: job.created_at ?? job.createdAt,
+      updatedAt: job.updated_at ?? job.updatedAt,
+      videoUrl: job.video_url ?? job.videoUrl,
+      teamName: job.team_name ?? job.teamName,
+      status: job.status ?? job.state,
+      progress: mapProgress(job.progress),
+      previewFrames: Array.isArray(previewFramesSource)
+        ? previewFramesSource.map(mapPreviewFrame)
+        : [],
+      result: result
+        ? {
+            ...result,
+            previewFrames: (result.preview_frames ?? result.previewFrames ?? []).map(
+              mapPreviewFrame
+            ),
+            playerRef: result.player_ref ?? result.playerRef,
+            summary: mapSummary(result.summary),
+            assets: mapAssets(result.assets),
+            clips: (result.clips ?? []).map(mapClip)
+          }
+        : result,
+      target: target
+        ? {
+            ...target,
+            selections: (target.selections ?? []).map(mapTargetSelection)
+          }
+        : target
+    }
   };
 };
 
