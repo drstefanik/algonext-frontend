@@ -15,9 +15,9 @@ import {
   getJob,
   listJobFrames,
   normalizeJob,
-  normalizePreviewFrames,
   saveJobPlayerRef,
   saveJobTargetSelection,
+  type FrameItem,
   type FrameSelection,
   type JobResponse,
   type PreviewFrame,
@@ -28,6 +28,22 @@ import ResultView from "@/components/ResultView";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
+
+const mapFrameItemToPreviewFrame = (
+  frame: FrameItem,
+  index: number
+): PreviewFrame => {
+  const timeSec = frame.time_sec ?? 0;
+  const key = frame.key ?? `frame-${timeSec}-${index}`;
+  return {
+    timeSec,
+    key,
+    url: frame.url,
+    signedUrl: frame.url,
+    width: frame.width ?? null,
+    height: frame.height ?? null
+  };
+};
 
 const buildHttpErrorMessage = async (response: Response) => {
   let message = "";
@@ -230,6 +246,7 @@ export default function JobRunner() {
   const displayStatusLabel =
     displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
 
+  const jobPreviewFrames = job?.previewFrames ?? job?.result?.previewFrames ?? [];
   const statusClass = useMemo(() => {
     if (!displayStatus) {
       return "bg-slate-800 text-slate-200";
@@ -237,9 +254,7 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const jobPreviewFrames = job?.previewFrames ?? job?.result?.previewFrames ?? [];
-  const resolvedPreviewFrames =
-    previewFrames.length > 0 ? previewFrames : jobPreviewFrames;
+  const resolvedPreviewFrames = previewFrames;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
@@ -252,7 +267,7 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const shouldPollFrames =
-    (isPreviewsReady || jobPreviewFrames.length > 0) && Boolean(jobId);
+    Boolean(jobId) && (isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
   const showTargetSection =
     isWaitingForTarget || (isExtractingPreviews && resolvedPreviewFrames.length > 0);
   const showPreviewFrameLoader =
@@ -270,7 +285,7 @@ export default function JobRunner() {
     : null;
 
   const getPreviewFrameSrc = (frame: PreviewFrame) =>
-    frame.url ?? frame.signedUrl ?? "";
+    frame.url ?? "";
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
     console.error("FRAME_IMG_ERROR", {
@@ -371,15 +386,7 @@ export default function JobRunner() {
       previewListRequestRef.current = 0;
       return;
     }
-
-    if (jobPreviewFrames.length > 0) {
-      setPreviewFrames([]);
-      setPreviewPollingError(null);
-      setPreviewPollingActive(false);
-      setPreviewImageErrors({});
-      setPreviewError(null);
-    }
-  }, [jobId, jobPreviewFrames.length]);
+  }, [jobId]);
 
   useEffect(() => {
     if (!jobId) {
@@ -397,7 +404,7 @@ export default function JobRunner() {
     }
 
     listJobFrames(jobId)
-      .then((items) => {
+      .then(({ items }) => {
         if (!isMounted) {
           return;
         }
@@ -405,18 +412,8 @@ export default function JobRunner() {
           return;
         }
         if (items.length > 0) {
-          const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
-            ...frame,
-            key: frame.key ?? `frame-${frame.timeSec}-${index}`
-          }));
+          const mappedFrames = items.map(mapFrameItemToPreviewFrame);
           setPreviewFrames(mappedFrames);
-        } else if (jobPreviewFrames.length > 0) {
-          setPreviewFrames(
-            normalizePreviewFrames(jobPreviewFrames).map((frame, index) => ({
-              ...frame,
-              key: frame.key ?? `frame-${frame.timeSec}-${index}`
-            }))
-          );
         }
         setPreviewError(null);
       })
@@ -435,7 +432,6 @@ export default function JobRunner() {
     };
   }, [
     jobId,
-    jobPreviewFrames,
     previewFrames.length,
     job?.updatedAt,
     job?.progress?.updatedAt,
@@ -494,33 +490,15 @@ export default function JobRunner() {
     const interval = setInterval(async () => {
       try {
         attempts += 1;
-        const items = await listJobFrames(jobId);
+        const { items } = await listJobFrames(jobId);
 
         if (!isMounted) {
           return;
         }
 
         if (items.length > 0) {
-          const mappedFrames = normalizePreviewFrames(items).map((frame, index) => ({
-            ...frame,
-            key: frame.key ?? `frame-${frame.timeSec}-${index}`
-          }));
+          const mappedFrames = items.map(mapFrameItemToPreviewFrame);
           setPreviewFrames(mappedFrames);
-          setPreviewPollingActive(false);
-          setPreviewPollingError(null);
-          setPreviewError(null);
-          clearInterval(interval);
-          return;
-        }
-
-        if (jobPreviewFrames.length > 0) {
-          const fallbackFrames = normalizePreviewFrames(jobPreviewFrames).map(
-            (frame, index) => ({
-              ...frame,
-              key: frame.key ?? `frame-${frame.timeSec}-${index}`
-            })
-          );
-          setPreviewFrames(fallbackFrames);
           setPreviewPollingActive(false);
           setPreviewPollingError(null);
           setPreviewError(null);
@@ -550,7 +528,6 @@ export default function JobRunner() {
   }, [
     jobId,
     shouldPollFrames,
-    jobPreviewFrames,
     previewFrames.length,
     previewPollingError,
     previewPollingActive,

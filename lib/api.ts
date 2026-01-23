@@ -62,6 +62,15 @@ export type PreviewFrame = {
   height?: number | null;
 };
 
+export type FrameItem = {
+  name: string;
+  url: string;
+  key: string;
+  width?: number | null;
+  height?: number | null;
+  time_sec?: number | null;
+};
+
 export type JobResult = {
   schema_version?: string;
   summary?: JobResultSummary;
@@ -148,21 +157,21 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   };
 };
 
-const mapFrameListItem = (frame: UnknownRecord): PreviewFrame => {
-  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
-  const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec}`;
+const mapFrameListItem = (frame: UnknownRecord): FrameItem => {
+  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? null;
+  const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec ?? 0}`;
   const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
+  const name = frame.name ?? frame.filename ?? key;
 
   return {
-    ...frame,
-    key,
-    timeSec,
+    name,
     url,
-    signedUrl: url,
+    key,
     width,
-    height
+    height,
+    time_sec: timeSec
   };
 };
 
@@ -174,7 +183,7 @@ export const normalizePreviewFrames = (frames: unknown): PreviewFrame[] => {
   return frames.map(mapPreviewFrame).filter((frame) => Boolean(frame.signedUrl));
 };
 
-const normalizeFrameListItems = (frames: unknown): PreviewFrame[] => {
+const normalizeFrameListItems = (frames: unknown): FrameItem[] => {
   if (!Array.isArray(frames)) {
     return [];
   }
@@ -357,10 +366,13 @@ export async function getJobFrames(jobId: string, count = 8) {
 }
 
 export async function listJobFrames(jobId: string) {
-  const response = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/frames/list`, {
-    method: "GET",
-    cache: "no-store"
-  });
+  const response = await fetchWithTimeout(
+    `/api/jobs/${encodeURIComponent(jobId)}/frames/list`,
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
 
   if (!response.ok) {
     await handleError(response);
@@ -377,9 +389,17 @@ export async function listJobFrames(jobId: string) {
     throw new Error(msg);
   }
 
-  const itemsSource = payload?.data?.items ?? [];
+  const itemsSource = payload?.data?.items ?? payload?.data?.data?.items ?? payload?.items ?? [];
+  const ok =
+    payload?.ok ??
+    payload?.data?.ok ??
+    payload?.data?.data?.ok ??
+    true;
 
-  return normalizeFrameListItems(itemsSource);
+  return {
+    ok: Boolean(ok),
+    items: normalizeFrameListItems(itemsSource)
+  };
 }
 
 export async function getJobFramesList(jobId: string) {
