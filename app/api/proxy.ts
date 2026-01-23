@@ -103,7 +103,6 @@ export async function forward(
       headers,
       body: bodyText,
       cache: "no-store",
-      // @ts-expect-error Next.js extended fetch options
       next: { revalidate: 0 },
     });
 
