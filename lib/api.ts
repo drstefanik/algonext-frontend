@@ -472,17 +472,3 @@ export async function saveJobTargetSelection(
 
   return response;
 }
-
-export async function confirmJobSelection(jobId: string) {
-  const response = await fetchWithTimeout(`/api/jobs/${jobId}/confirm-selection`, {
-    method: "POST",
-    headers: jsonHeaders,
-    cache: "no-store"
-  });
-
-  if (!response.ok) {
-    await handleError(response);
-  }
-
-  return response;
-}
