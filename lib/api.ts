@@ -249,33 +249,71 @@ async function fetchWithTimeout(
   }
 }
 
+const extractDetailMessage = (detail: unknown) => {
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          if ("msg" in item && typeof item.msg === "string") {
+            return item.msg;
+          }
+          if ("message" in item && typeof item.message === "string") {
+            return item.message;
+          }
+          return JSON.stringify(item);
+        }
+        return String(item);
+      })
+      .filter(Boolean);
+    return messages.length ? messages.join("; ") : null;
+  }
+
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = detail.message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return null;
+};
+
 async function handleError(response: Response) {
-  let message = response.statusText || "Request failed";
+  let message = "";
 
   try {
     const data = await response.clone().json();
-    if (data?.detail?.error?.message) {
-      message = data.detail.error.message;
-    } else if (data?.error?.message) {
-      message = data.error.message;
-    } else if (data?.message) {
-      message = data.message;
-    } else if (data?.error) {
-      message = data.error;
-    } else if (data?.detail) {
-      message = data.detail;
-    } else {
-      message = JSON.stringify(data);
-    }
+    const detailMessage = extractDetailMessage(data?.detail);
+    message =
+      detailMessage ??
+      (typeof data?.error === "string" ? data.error : data?.error?.message) ??
+      data?.progress?.message ??
+      data?.message ??
+      null;
   } catch {
+    // ignore json parsing errors
+  }
+
+  if (!message) {
     try {
       const text = await response.text();
       if (text) {
         message = text;
       }
     } catch {
-      // ignore parsing errors
+      // ignore text parsing errors
     }
+  }
+
+  if (!message) {
+    message = response.statusText || "Unexpected error";
   }
 
   throw new Error(message);
@@ -379,56 +417,24 @@ export async function listJobFrames(jobId: string) {
   }
 
   const payload = await response.json().catch(() => null);
-
-  if (payload?.ok === false) {
-    const msg =
-      payload?.error?.message ||
-      payload?.error ||
-      payload?.message ||
-      "Frames list failed";
-    throw new Error(msg);
-  }
-
-  const itemsSource = payload?.data?.items ?? payload?.data?.data?.items ?? payload?.items ?? [];
-  const ok =
-    payload?.ok ??
-    payload?.data?.ok ??
-    payload?.data?.data?.ok ??
-    true;
+  const itemsSource = Array.isArray(payload)
+    ? payload
+    : payload?.items ??
+      payload?.frames ??
+      payload?.data?.items ??
+      payload?.data?.frames ??
+      payload?.data?.data?.items ??
+      payload?.data?.data?.frames ??
+      [];
 
   return {
-    ok: Boolean(ok),
+    ok: true,
     items: normalizeFrameListItems(itemsSource)
   };
 }
 
 export async function getJobFramesList(jobId: string) {
   return listJobFrames(jobId);
-}
-
-export async function saveJobSelection(
-  jobId: string,
-  payload: {
-    selections: FrameSelection[];
-    player: {
-      shirt_number: number;
-      team_name: string;
-      player_name?: string;
-    };
-  }
-) {
-  const response = await fetchWithTimeout(`/api/jobs/${jobId}/selection`, {
-    method: "POST",
-    headers: jsonHeaders,
-    cache: "no-store",
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    await handleError(response);
-  }
-
-  return response;
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
