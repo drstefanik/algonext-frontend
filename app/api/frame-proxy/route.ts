@@ -1,8 +1,6 @@
-const ALLOWED_FRAME_HOST = "46.224.249.136:9000";
-
 const jsonHeaders = {
   "Content-Type": "application/json",
-  "cache-control": "no-store"
+  "Cache-Control": "no-store"
 };
 
 export async function GET(request: Request) {
@@ -26,13 +24,6 @@ export async function GET(request: Request) {
     });
   }
 
-  if (target.host !== ALLOWED_FRAME_HOST) {
-    return new Response(JSON.stringify({ ok: false, error: "Host not allowed" }), {
-      status: 403,
-      headers: jsonHeaders
-    });
-  }
-
   try {
     const upstream = await fetch(target.toString(), {
       method: "GET",
@@ -50,8 +41,8 @@ export async function GET(request: Request) {
     }
 
     const headers = new Headers();
-    headers.set("content-type", upstream.headers.get("content-type") ?? "image/jpeg");
-    headers.set("cache-control", "no-store");
+    headers.set("Content-Type", "image/jpeg");
+    headers.set("Cache-Control", "no-store");
 
     return new Response(upstream.body, {
       status: upstream.status,
