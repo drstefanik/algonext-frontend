@@ -51,16 +51,43 @@ const buildHttpErrorMessage = async (response: Response) => {
     const data = (await response.clone().json()) as
       | {
           error?: string | { message?: string };
-          detail?: string | { error?: { message?: string } };
+          detail?: unknown;
+          progress?: { message?: string };
           message?: string;
         }
       | undefined;
     if (data) {
-      message =
-        (typeof data.error === "object" ? data.error?.message : data.error) ??
-        (typeof data.detail === "object" ? data.detail?.error?.message : data.detail) ??
-        data.message ??
-        "";
+      const detail = data.detail;
+      if (typeof detail === "string") {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail
+          .map((item) => {
+            if (typeof item === "string") {
+              return item;
+            }
+            if (item && typeof item === "object") {
+              if ("msg" in item && typeof item.msg === "string") {
+                return item.msg;
+              }
+              if ("message" in item && typeof item.message === "string") {
+                return item.message;
+              }
+              return JSON.stringify(item);
+            }
+            return String(item);
+          })
+          .filter(Boolean)
+          .join("; ");
+      }
+
+      if (!message) {
+        message =
+          (typeof data.error === "object" ? data.error?.message : data.error) ??
+          data.progress?.message ??
+          data.message ??
+          "";
+      }
     }
   } catch {
     // ignore json parse errors
@@ -74,8 +101,11 @@ const buildHttpErrorMessage = async (response: Response) => {
     }
   }
 
-  const prefix = response.status ? `HTTP ${response.status}` : "Request failed";
-  return message ? `${prefix}: ${message}` : prefix;
+  if (!message) {
+    message = response.statusText || "Unexpected error";
+  }
+
+  return message;
 };
 
 const extractNestedErrorMessage = (error: unknown) => {
@@ -107,6 +137,29 @@ const extractNestedErrorMessage = (error: unknown) => {
     if (typeof detail === "string") {
       return detail;
     }
+    if (Array.isArray(detail)) {
+      const message = detail
+        .map((item) => {
+          if (typeof item === "string") {
+            return item;
+          }
+          if (item && typeof item === "object") {
+            if ("msg" in item && typeof item.msg === "string") {
+              return item.msg;
+            }
+            if ("message" in item && typeof item.message === "string") {
+              return item.message;
+            }
+            return JSON.stringify(item);
+          }
+          return String(item);
+        })
+        .filter(Boolean)
+        .join("; ");
+      if (message) {
+        return message;
+      }
+    }
     if (
       detail &&
       typeof detail === "object" &&
@@ -117,6 +170,16 @@ const extractNestedErrorMessage = (error: unknown) => {
       typeof detail.error.message === "string"
     ) {
       return detail.error.message;
+    }
+  }
+
+  if ("progress" in error) {
+    const progress = (error as { progress?: unknown }).progress;
+    if (progress && typeof progress === "object" && "message" in progress) {
+      const progressMessage = progress.message;
+      if (typeof progressMessage === "string") {
+        return progressMessage;
+      }
     }
   }
 
@@ -205,8 +268,9 @@ export default function JobRunner() {
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
-  const [targetSelectionSaved, setTargetSelectionSaved] = useState(false);
+  const [targetSaved, setTargetSaved] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
+  const [playerSaved, setPlayerSaved] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("player-ref");
   const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
     null
@@ -262,11 +326,11 @@ export default function JobRunner() {
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const shouldSelectPlayer = resolvedPreviewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasTargetSelection = Boolean(jobTargetSelection ?? (targetSelection && targetSelectionSaved));
   const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
+  const canEnqueue = playerSaved && targetSaved;
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
@@ -373,9 +437,13 @@ export default function JobRunner() {
   useEffect(() => {
     if (jobTargetSelection) {
       setTargetSelection(jobTargetSelection);
-      setTargetSelectionSaved(true);
+      setTargetSaved(true);
     }
   }, [jobTargetSelection]);
+
+  useEffect(() => {
+    setPlayerSaved(Boolean(playerRef));
+  }, [playerRef]);
 
   useEffect(() => {
     if (!shouldPollFrames) {
@@ -530,11 +598,12 @@ export default function JobRunner() {
       setJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
-      setTargetSelectionSaved(false);
+      setTargetSaved(false);
       setSelectionSuccess(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
+      setPlayerSaved(false);
     } catch (createError) {
       setError(toErrorMessage(createError));
     } finally {
@@ -544,6 +613,10 @@ export default function JobRunner() {
 
   const handleEnqueue = async () => {
     if (!jobId) {
+      return;
+    }
+    if (!canEnqueue) {
+      setError("Prima salva Player Box e Target Box.");
       return;
     }
     setError(null);
@@ -570,7 +643,7 @@ export default function JobRunner() {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      setTargetSelectionSaved(true);
+      setTargetSaved(true);
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -665,7 +738,7 @@ export default function JobRunner() {
           w: width / image.clientWidth,
           h: height / image.clientHeight
         });
-        setTargetSelectionSaved(false);
+        setTargetSaved(false);
       }
     }
     setPreviewDragState(null);
@@ -718,6 +791,7 @@ export default function JobRunner() {
       await saveJobPlayerRef(jobId, playerRefSelection);
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
+      setPlayerSaved(true);
       handleClosePreview();
     } catch (saveError) {
       setPlayerRefError(toErrorMessage(saveError));
@@ -777,7 +851,7 @@ export default function JobRunner() {
     setJobId(null);
     setJob(null);
     setTargetSelection(null);
-    setTargetSelectionSaved(false);
+    setTargetSaved(false);
     setError(null);
     setSelectionError(null);
     setSelectionSuccess(null);
@@ -793,6 +867,7 @@ export default function JobRunner() {
     setPreviewPollingActive(false);
     setPreviewPollingAttempt(0);
     setPreviewImageErrors({});
+    setPlayerSaved(false);
     previewListRequestRef.current = 0;
   };
 
@@ -894,17 +969,17 @@ export default function JobRunner() {
             <button
               type="button"
               onClick={handleEnqueue}
-              disabled={
-                submitting ||
-                (job?.status === "WAITING_FOR_SELECTION" && !hasTargetSelection)
-              }
-              className="mt-3 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={submitting}
+              aria-disabled={!canEnqueue || submitting}
+              className={`mt-3 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 ${
+                !canEnqueue || submitting ? "cursor-not-allowed opacity-50" : ""
+              }`}
             >
               {submitting ? "Enqueueing..." : "Enqueue"}
             </button>
-            {job?.status === "WAITING_FOR_SELECTION" ? (
+            {!canEnqueue ? (
               <p className="mt-2 text-xs text-slate-500">
-                Add a target box to unlock enqueue.
+                Save Player Box and Target Box to unlock enqueue.
               </p>
             ) : null}
           </div>
