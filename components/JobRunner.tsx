@@ -267,7 +267,8 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const shouldPollFrames =
-    Boolean(jobId) && (isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
+    Boolean(jobId) &&
+    (isExtractingPreviews || isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
   const showTargetSection =
     isWaitingForTarget || (isExtractingPreviews && resolvedPreviewFrames.length > 0);
   const showPreviewFrameLoader =
@@ -394,48 +395,75 @@ export default function JobRunner() {
     }
 
     let isMounted = true;
-    const requestId = previewListRequestRef.current + 1;
+    const requestId = Date.now();
     previewListRequestRef.current = requestId;
+    let attempts = 0;
+    const maxAttempts = 30;
+    const intervalMs = 1500;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    if (!shouldPollFrames || previewFrames.length > 0) {
-      return () => {
-        isMounted = false;
-      };
-    }
+    const poll = () => {
+      setPreviewPollingActive(true);
+      listJobFrames(jobId)
+        .then(({ items }) => {
+          if (!isMounted) {
+            return;
+          }
+          if (previewListRequestRef.current !== requestId) {
+            return;
+          }
 
-    listJobFrames(jobId)
-      .then(({ items }) => {
-        if (!isMounted) {
-          return;
-        }
-        if (previewListRequestRef.current !== requestId) {
-          return;
-        }
-        if (items.length > 0) {
           const mappedFrames = items.map(mapFrameItemToPreviewFrame);
           setPreviewFrames(mappedFrames);
-        }
-        setPreviewError(null);
-      })
-      .catch((fetchError) => {
-        if (!isMounted) {
-          return;
-        }
-        if (previewListRequestRef.current !== requestId) {
-          return;
-        }
-        setPreviewError(String(fetchError?.message || fetchError));
-      });
+          setPreviewError(null);
+          setPreviewPollingError(null);
+
+          attempts += 1;
+          if (shouldPollFrames && items.length === 0 && attempts < maxAttempts) {
+            timeoutId = setTimeout(poll, intervalMs);
+            return;
+          }
+
+          if (shouldPollFrames && items.length === 0 && attempts >= maxAttempts) {
+            setPreviewPollingError("Preview polling timed out. Please retry.");
+          }
+          setPreviewPollingActive(false);
+        })
+        .catch((fetchError) => {
+          if (!isMounted) {
+            return;
+          }
+          if (previewListRequestRef.current !== requestId) {
+            return;
+          }
+
+          const message = String(fetchError?.message || fetchError);
+          setPreviewError(message);
+          setPreviewPollingError(message);
+
+          attempts += 1;
+          if (shouldPollFrames && attempts < maxAttempts) {
+            timeoutId = setTimeout(poll, intervalMs);
+            return;
+          }
+          setPreviewPollingActive(false);
+        });
+    };
+
+    poll();
 
     return () => {
       isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [
     jobId,
-    previewFrames.length,
     job?.updatedAt,
     job?.progress?.updatedAt,
-    shouldPollFrames
+    shouldPollFrames,
+    previewPollingAttempt
   ]);
 
   useEffect(() => {
@@ -466,73 +494,6 @@ export default function JobRunner() {
       lastFocusedElementRef.current?.focus();
     }
   }, [selectedPreviewFrame]);
-
-  useEffect(() => {
-    if (
-      !jobId ||
-      !shouldPollFrames ||
-      previewFrames.length > 0
-    ) {
-      return;
-    }
-
-    if (previewPollingError || previewPollingActive) {
-      return;
-    }
-
-    let isMounted = true;
-    let attempts = 0;
-    const maxAttempts = 20;
-    const intervalMs = 1500;
-
-    setPreviewPollingActive(true);
-
-    const interval = setInterval(async () => {
-      try {
-        attempts += 1;
-        const { items } = await listJobFrames(jobId);
-
-        if (!isMounted) {
-          return;
-        }
-
-        if (items.length > 0) {
-          const mappedFrames = items.map(mapFrameItemToPreviewFrame);
-          setPreviewFrames(mappedFrames);
-          setPreviewPollingActive(false);
-          setPreviewPollingError(null);
-          setPreviewError(null);
-          clearInterval(interval);
-          return;
-        }
-
-        if (attempts >= maxAttempts) {
-          setPreviewPollingError("Preview polling timed out. Please retry.");
-          setPreviewPollingActive(false);
-          clearInterval(interval);
-        }
-      } catch (pollError) {
-        if (!isMounted) {
-          return;
-        }
-        setPreviewPollingError(toErrorMessage(pollError));
-        setPreviewPollingActive(false);
-        clearInterval(interval);
-      }
-    }, intervalMs);
-
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [
-    jobId,
-    shouldPollFrames,
-    previewFrames.length,
-    previewPollingError,
-    previewPollingActive,
-    previewPollingAttempt
-  ]);
 
   const handleCreateJob = async () => {
     setError(null);

@@ -367,7 +367,7 @@ export async function getJobFrames(jobId: string, count = 8) {
 
 export async function listJobFrames(jobId: string) {
   const response = await fetchWithTimeout(
-    `/api/jobs/${encodeURIComponent(jobId)}/frames/list`,
+    `/api/jobs/${encodeURIComponent(jobId)}/frames/list?ts=${Date.now()}`,
     {
       method: "GET",
       cache: "no-store"
