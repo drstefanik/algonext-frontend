@@ -9,7 +9,6 @@ import {
   type MouseEvent
 } from "react";
 import {
-  confirmJobSelection,
   createJob,
   enqueueJob,
   getJob,
@@ -201,6 +200,7 @@ export default function JobRunner() {
   );
   const [error, setError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -523,6 +523,7 @@ export default function JobRunner() {
       setJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
+      setSelectionSuccess(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
@@ -555,15 +556,16 @@ export default function JobRunner() {
       return;
     }
     setSelectionError(null);
+    setSelectionSuccess(null);
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      await confirmJobSelection(jobId);
-      const updatedJob = await getJob(jobId);
+      const updatedJob = await enqueueJob(jobId);
       setJob(updatedJob);
       setPolling(true);
+      setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
     } finally {
@@ -649,6 +651,7 @@ export default function JobRunner() {
           h: height / image.clientHeight
         });
       } else {
+        setSelectionSuccess(null);
         setTargetSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
           x: left / image.clientWidth,
@@ -769,6 +772,7 @@ export default function JobRunner() {
     setTargetSelection(null);
     setError(null);
     setSelectionError(null);
+    setSelectionSuccess(null);
     setPlayerRefError(null);
     setPolling(false);
     setSavingSelection(false);
@@ -1230,6 +1234,11 @@ export default function JobRunner() {
             {selectionError ? (
               <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
                 {selectionError}
+              </div>
+            ) : null}
+            {selectionSuccess ? (
+              <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                {selectionSuccess}
               </div>
             ) : null}
           </div>
