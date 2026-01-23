@@ -205,6 +205,7 @@ export default function JobRunner() {
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
+  const [targetSelectionSaved, setTargetSelectionSaved] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("player-ref");
   const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
@@ -261,7 +262,7 @@ export default function JobRunner() {
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const shouldSelectPlayer = resolvedPreviewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasTargetSelection = Boolean(targetSelection ?? jobTargetSelection);
+  const hasTargetSelection = Boolean(jobTargetSelection ?? (targetSelection && targetSelectionSaved));
   const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
@@ -285,8 +286,13 @@ export default function JobRunner() {
       }
     : null;
 
-  const getPreviewFrameSrc = (frame: PreviewFrame) =>
-    frame.url ?? "";
+  const getPreviewFrameSrc = (frame: PreviewFrame) => {
+    const signedUrl = frame.signedUrl ?? frame.url ?? "";
+    if (!signedUrl) {
+      return "";
+    }
+    return `/api/frame-proxy?url=${encodeURIComponent(signedUrl)}`;
+  };
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
     console.error("FRAME_IMG_ERROR", {
@@ -367,6 +373,7 @@ export default function JobRunner() {
   useEffect(() => {
     if (jobTargetSelection) {
       setTargetSelection(jobTargetSelection);
+      setTargetSelectionSaved(true);
     }
   }, [jobTargetSelection]);
 
@@ -523,6 +530,7 @@ export default function JobRunner() {
       setJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
+      setTargetSelectionSaved(false);
       setSelectionSuccess(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
@@ -562,9 +570,7 @@ export default function JobRunner() {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      const updatedJob = await enqueueJob(jobId);
-      setJob(updatedJob);
-      setPolling(true);
+      setTargetSelectionSaved(true);
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -659,6 +665,7 @@ export default function JobRunner() {
           w: width / image.clientWidth,
           h: height / image.clientHeight
         });
+        setTargetSelectionSaved(false);
       }
     }
     setPreviewDragState(null);
@@ -770,6 +777,7 @@ export default function JobRunner() {
     setJobId(null);
     setJob(null);
     setTargetSelection(null);
+    setTargetSelectionSaved(false);
     setError(null);
     setSelectionError(null);
     setSelectionSuccess(null);
