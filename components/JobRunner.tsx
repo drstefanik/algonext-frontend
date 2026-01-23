@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type KeyboardEvent,
   type MouseEvent
 } from "react";
@@ -27,6 +28,9 @@ import ResultView from "@/components/ResultView";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
+const REQUIRED_FRAME_COUNT = 8;
+
+const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
 
 const mapFrameItemToPreviewFrame = (
   frame: FrameItem,
@@ -282,6 +286,7 @@ export default function JobRunner() {
     useState<PreviewDragState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
+  const [framesFrozen, setFramesFrozen] = useState(false);
   const [previewPollingError, setPreviewPollingError] = useState<string | null>(
     null
   );
@@ -320,26 +325,30 @@ export default function JobRunner() {
   }, [displayStatus]);
 
   const resolvedPreviewFrames = previewFrames;
+  const hasFullPreviewSet = resolvedPreviewFrames.length >= REQUIRED_FRAME_COUNT;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
-  const shouldSelectPlayer = resolvedPreviewFrames.length > 0 && !playerRef;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
   const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
+  const selectionReady =
+    hasFullPreviewSet && (isWaitingForPlayer || isWaitingForTarget);
+  const shouldSelectPlayer = selectionReady && !playerRef && isWaitingForPlayer;
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = playerSaved && targetSaved;
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
-  const showTargetSection =
-    isWaitingForTarget || (isExtractingPreviews && resolvedPreviewFrames.length > 0);
+  const shouldPollFrameList = shouldPollFrames && !framesFrozen;
+  const showTargetSection = selectionReady && isWaitingForTarget;
   const showPreviewFrameLoader =
     jobId &&
-    resolvedPreviewFrames.length === 0 &&
+    !hasFullPreviewSet &&
     (isExtractingPreviews || isWaitingForPlayer || isWaitingForTarget);
+  const frameSelectorKey = jobId ?? "frame-selector";
 
   const activePreviewRect = previewDragState
     ? {
@@ -446,14 +455,15 @@ export default function JobRunner() {
   }, [playerRef]);
 
   useEffect(() => {
-    if (!shouldPollFrames) {
+    if (!shouldPollFrameList) {
       setPreviewPollingActive(false);
     }
-  }, [shouldPollFrames]);
+  }, [shouldPollFrameList]);
 
   useEffect(() => {
     if (!jobId) {
       setPreviewFrames([]);
+      setFramesFrozen(false);
       setPreviewPollingError(null);
       setPreviewPollingActive(false);
       setPreviewPollingAttempt(0);
@@ -465,7 +475,19 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
-    if (!jobId) {
+    if (jobId) {
+      setFramesFrozen(false);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    if (!framesFrozen && selectionReady) {
+      setFramesFrozen(true);
+    }
+  }, [framesFrozen, selectionReady]);
+
+  useEffect(() => {
+    if (!jobId || !shouldPollFrameList) {
       return;
     }
 
@@ -488,18 +510,28 @@ export default function JobRunner() {
             return;
           }
 
-          const mappedFrames = items.map(mapFrameItemToPreviewFrame);
-          setPreviewFrames(mappedFrames);
+          if (!framesFrozen) {
+            const mappedFrames = items.map(mapFrameItemToPreviewFrame);
+            setPreviewFrames(mappedFrames);
+          }
           setPreviewError(null);
           setPreviewPollingError(null);
 
           attempts += 1;
-          if (shouldPollFrames && items.length === 0 && attempts < maxAttempts) {
+          if (
+            shouldPollFrameList &&
+            items.length < REQUIRED_FRAME_COUNT &&
+            attempts < maxAttempts
+          ) {
             timeoutId = setTimeout(poll, intervalMs);
             return;
           }
 
-          if (shouldPollFrames && items.length === 0 && attempts >= maxAttempts) {
+          if (
+            shouldPollFrameList &&
+            items.length < REQUIRED_FRAME_COUNT &&
+            attempts >= maxAttempts
+          ) {
             setPreviewPollingError("Preview polling timed out. Please retry.");
           }
           setPreviewPollingActive(false);
@@ -517,7 +549,7 @@ export default function JobRunner() {
           setPreviewPollingError(message);
 
           attempts += 1;
-          if (shouldPollFrames && attempts < maxAttempts) {
+          if (shouldPollFrameList && attempts < maxAttempts) {
             timeoutId = setTimeout(poll, intervalMs);
             return;
           }
@@ -538,6 +570,7 @@ export default function JobRunner() {
     job?.updatedAt,
     job?.progress?.updatedAt,
     shouldPollFrames,
+    shouldPollFrameList,
     previewPollingAttempt
   ]);
 
@@ -625,6 +658,8 @@ export default function JobRunner() {
       const response = await enqueueJob(jobId);
       setJob(normalizeJob(response));
       setPolling(true);
+      setFramesFrozen(true);
+      setSelectedPreviewFrame(null);
     } catch (enqueueError) {
       setError(toErrorMessage(enqueueError));
     } finally {
@@ -863,6 +898,7 @@ export default function JobRunner() {
     setPlayerRefSelection(null);
     setPreviewDragState(null);
     setPreviewFrames([]);
+    setFramesFrozen(false);
     setPreviewPollingError(null);
     setPreviewPollingActive(false);
     setPreviewPollingAttempt(0);
@@ -1030,7 +1066,7 @@ export default function JobRunner() {
             </div>
           ) : null}
           {shouldSelectPlayer ? (
-            <>
+            <FrameSelector key={frameSelectorKey}>
               <p className="text-sm text-slate-400">
                 Click a preview frame to draw a bounding box around the player.
               </p>
@@ -1066,7 +1102,7 @@ export default function JobRunner() {
               <p className="text-xs text-slate-500">
                 You will be asked to draw one bounding box in the full-size view.
               </p>
-            </>
+            </FrameSelector>
           ) : (
             <div className="space-y-3 text-sm text-slate-400">
               {playerRef ? (
@@ -1191,140 +1227,144 @@ export default function JobRunner() {
         </div>
 
         {showTargetSection ? (
-          <div
-            ref={targetSectionRef}
-            className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6"
-          >
-            <div className="flex flex-col gap-2">
-              <h3 className="text-lg font-semibold text-white">
-                Select target (1 box)
-              </h3>
-              <p className="text-sm text-slate-400">
-                Choose one preview frame and draw a bounding box around the
-                target player.
-              </p>
-            </div>
-            {hasPreviewFrameErrors ? (
-              <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                Images blocked or failed to load. Check the frame proxy or mixed
-                content settings.
+          <FrameSelector key={frameSelectorKey}>
+            <div
+              ref={targetSectionRef}
+              className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6"
+            >
+              <div className="flex flex-col gap-2">
+                <h3 className="text-lg font-semibold text-white">
+                  Select target (1 box)
+                </h3>
+                <p className="text-sm text-slate-400">
+                  Choose one preview frame and draw a bounding box around the
+                  target player.
+                </p>
               </div>
-            ) : null}
-
-            <div className="mt-4 space-y-4">
-              {resolvedPreviewFrames.length === 0 ? (
-                <div className="space-y-3 text-sm text-slate-400">
-                  {showPreviewFrameLoader ? (
-                    <div className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
-                      <span>
-                        {previewPollingActive
-                          ? "Preview frames are loading."
-                          : "Waiting for previews."}
-                      </span>
-                    </div>
-                  ) : (
-                    <p>No frames yet.</p>
-                  )}
-                  {previewPollingError ? (
-                    <p className="text-xs text-rose-200">{previewPollingError}</p>
-                  ) : null}
-                  {jobId ? (
-                    <button
-                      type="button"
-                      onClick={
-                        previewPollingError
-                          ? handleRetryPreviewPolling
-                          : handleRefreshJob
-                      }
-                      disabled={previewPollingError ? false : refreshingFrames}
-                      className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {previewPollingError
-                        ? "Retry polling"
-                        : refreshingFrames
-                        ? "Refreshing..."
-                        : "Retry"}
-                    </button>
-                  ) : null}
+              {hasPreviewFrameErrors ? (
+                <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                  Images blocked or failed to load. Check the frame proxy or mixed
+                  content settings.
                 </div>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {resolvedPreviewFrames.map((frame, index) => {
-                    const isSelected =
-                      targetSelection?.frameTimeSec === frame.timeSec;
-                    return (
+              ) : null}
+
+              <div className="mt-4 space-y-4">
+                {!hasFullPreviewSet ? (
+                  <div className="space-y-3 text-sm text-slate-400">
+                    {showPreviewFrameLoader ? (
+                      <div className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
+                        <span>
+                          {previewPollingActive
+                            ? "Preview frames are loading."
+                            : "Waiting for previews."}
+                        </span>
+                      </div>
+                    ) : (
+                      <p>No frames yet.</p>
+                    )}
+                    {previewPollingError ? (
+                      <p className="text-xs text-rose-200">
+                        {previewPollingError}
+                      </p>
+                    ) : null}
+                    {jobId ? (
                       <button
-                        key={`${frame.key}-${index}`}
                         type="button"
-                        onClick={() => handleOpenPreview(frame, "target")}
-                        className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-amber-300/70"
+                        onClick={
+                          previewPollingError
+                            ? handleRetryPreviewPolling
+                            : handleRefreshJob
+                        }
+                        disabled={previewPollingError ? false : refreshingFrames}
+                        className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {previewImageErrors[frame.key] ? (
-                          <div className="flex h-36 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
-                            Image blocked
-                          </div>
-                        ) : (
-                          <img
-                            src={getPreviewFrameSrc(frame)}
-                            alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
-                            className="h-36 w-full object-cover"
-                            onLoad={() => handlePreviewImageLoad(frame)}
-                            onError={() => handlePreviewImageError(frame, "target-grid")}
-                          />
-                        )}
-                        {isSelected && targetSelection ? (
-                          <div className="pointer-events-none absolute inset-0">
-                            <div
-                              className="absolute rounded border border-amber-400 bg-amber-400/20"
-                              style={{
-                                left: `${targetSelection.x * 100}%`,
-                                top: `${targetSelection.y * 100}%`,
-                                width: `${targetSelection.w * 100}%`,
-                                height: `${targetSelection.h * 100}%`
-                              }}
-                            />
-                          </div>
-                        ) : null}
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                            t={frame.timeSec.toFixed(2)}s
-                          </p>
-                        </div>
+                        {previewPollingError
+                          ? "Retry polling"
+                          : refreshingFrames
+                          ? "Refreshing..."
+                          : "Retry"}
                       </button>
-                    );
-                  })}
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {resolvedPreviewFrames.map((frame, index) => {
+                      const isSelected =
+                        targetSelection?.frameTimeSec === frame.timeSec;
+                      return (
+                        <button
+                          key={`${frame.key}-${index}`}
+                          type="button"
+                          onClick={() => handleOpenPreview(frame, "target")}
+                          className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-amber-300/70"
+                        >
+                          {previewImageErrors[frame.key] ? (
+                            <div className="flex h-36 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
+                              Image blocked
+                            </div>
+                          ) : (
+                            <img
+                              src={getPreviewFrameSrc(frame)}
+                              alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
+                              className="h-36 w-full object-cover"
+                              onLoad={() => handlePreviewImageLoad(frame)}
+                              onError={() => handlePreviewImageError(frame, "target-grid")}
+                            />
+                          )}
+                          {isSelected && targetSelection ? (
+                            <div className="pointer-events-none absolute inset-0">
+                              <div
+                                className="absolute rounded border border-amber-400 bg-amber-400/20"
+                                style={{
+                                  left: `${targetSelection.x * 100}%`,
+                                  top: `${targetSelection.y * 100}%`,
+                                  width: `${targetSelection.w * 100}%`,
+                                  height: `${targetSelection.h * 100}%`
+                                }}
+                              />
+                            </div>
+                          ) : null}
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
+                              t={frame.timeSec.toFixed(2)}s
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleSaveSelection}
+                    disabled={savingSelection || !targetSelection}
+                    className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {savingSelection ? "Saving..." : "Save selection"}
+                  </button>
+                  <span className="text-xs text-slate-500">
+                    {targetSelection
+                      ? "Ready to save selection."
+                      : "Select one box to continue."}
+                  </span>
                 </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSaveSelection}
-                  disabled={savingSelection || !targetSelection}
-                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {savingSelection ? "Saving..." : "Save selection"}
-                </button>
-                <span className="text-xs text-slate-500">
-                  {targetSelection
-                    ? "Ready to save selection."
-                    : "Select one box to continue."}
-                </span>
               </div>
+
+              {selectionError ? (
+                <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                  {selectionError}
+                </div>
+              ) : null}
+              {selectionSuccess ? (
+                <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                  {selectionSuccess}
+                </div>
+              ) : null}
             </div>
-
-            {selectionError ? (
-              <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-                {selectionError}
-              </div>
-            ) : null}
-            {selectionSuccess ? (
-              <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                {selectionSuccess}
-              </div>
-            ) : null}
-          </div>
+          </FrameSelector>
         ) : null}
 
         {job && job.status === "COMPLETED" ? <ResultView job={job} /> : null}
