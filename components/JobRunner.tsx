@@ -316,7 +316,6 @@ export default function JobRunner() {
   const displayStatusLabel =
     displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
 
-  const jobPreviewFrames = job?.previewFrames ?? job?.result?.previewFrames ?? [];
   const statusClass = useMemo(() => {
     if (!displayStatus) {
       return "bg-slate-800 text-slate-200";
@@ -335,7 +334,8 @@ export default function JobRunner() {
   const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
   const selectionReady =
     hasFullPreviewSet && (isWaitingForPlayer || isWaitingForTarget);
-  const shouldSelectPlayer = selectionReady && !playerRef && isWaitingForPlayer;
+  const shouldSelectPlayer =
+    hasFullPreviewSet && job?.status === "WAITING_FOR_PLAYER" && !playerRef;
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = playerSaved && targetSaved;
@@ -481,12 +481,6 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
-    if (!framesFrozen && selectionReady) {
-      setFramesFrozen(true);
-    }
-  }, [framesFrozen, selectionReady]);
-
-  useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
       return;
     }
@@ -516,6 +510,11 @@ export default function JobRunner() {
           }
           setPreviewError(null);
           setPreviewPollingError(null);
+
+          if (items.length >= REQUIRED_FRAME_COUNT) {
+            setPreviewPollingActive(false);
+            return;
+          }
 
           attempts += 1;
           if (
@@ -567,18 +566,15 @@ export default function JobRunner() {
     };
   }, [
     jobId,
-    job?.updatedAt,
-    job?.progress?.updatedAt,
-    shouldPollFrames,
     shouldPollFrameList,
-    previewPollingAttempt
+    previewPollingAttempt,
+    framesFrozen
   ]);
 
   useEffect(() => {
     console.log("PREVIEW_DEBUG", {
       status: job?.status ?? null,
       step: job?.progress?.step ?? null,
-      previewFramesPayload: jobPreviewFrames.length,
       previewFramesState: previewFrames.length,
       previewFramesResolved: resolvedPreviewFrames.length,
       previewImageErrorCount
@@ -586,7 +582,6 @@ export default function JobRunner() {
   }, [
     job?.status,
     job?.progress?.step,
-    jobPreviewFrames.length,
     previewFrames.length,
     resolvedPreviewFrames.length,
     previewImageErrorCount
@@ -688,7 +683,11 @@ export default function JobRunner() {
   };
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
+    if (!hasFullPreviewSet) {
+      return;
+    }
     setPreviewMode(mode);
+    setFramesFrozen(true);
     setSelectedPreviewFrame(frame);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
