@@ -2,6 +2,7 @@ import { forward } from "@/app/api/proxy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type RouteContext = {
   params: {
