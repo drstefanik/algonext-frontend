@@ -96,12 +96,15 @@ export async function forward(
 
     // IMPORTANT: non usare request.body (stream) su Vercel.
     // Bufferizza il body: stabile per JSON piccoli.
-    const bodyText = await request.clone().text();
+    const bodyText = includeBody ? await request.clone().text() : undefined;
 
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: includeBody ? bodyText : undefined,
+      body: bodyText,
+      cache: "no-store",
+      // @ts-expect-error Next.js extended fetch options
+      next: { revalidate: 0 },
     });
 
     const upstreamContentType =
@@ -144,12 +147,15 @@ export async function forward(
       );
     }
 
+    const resHeaders = new Headers(upstreamResponse.headers);
+    resHeaders.set("content-type", upstreamContentType);
+    resHeaders.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    resHeaders.set("pragma", "no-cache");
+    resHeaders.set("expires", "0");
+
     return new Response(responseBody, {
       status: upstreamResponse.status,
-      headers: {
-        "content-type": upstreamContentType,
-        "cache-control": "no-store",
-      },
+      headers: resHeaders,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
