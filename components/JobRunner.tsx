@@ -330,28 +330,33 @@ export default function JobRunner() {
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
+  const hasPlayer = Boolean(playerRef);
+  const hasTarget = Boolean(targetSelection) || Boolean(jobTargetSelection);
   const status = job?.status ?? null;
-  const isWaitingGeneric =
-    status === "WAITING_FOR_SELECTION" || status === "WAITING_FOR_PLAYER";
-  const isWaitingForPlayer = isWaitingGeneric && !playerRef;
-  const isWaitingForTarget = isWaitingGeneric && Boolean(playerRef);
-  const selectionReady =
-    hasFullPreviewSet && (isWaitingForPlayer || isWaitingForTarget);
-  const shouldSelectPlayer =
-    hasFullPreviewSet && !playerRef && isWaitingForPlayer;
+  const previewsReady = hasFullPreviewSet;
+  const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
+    ? "IDLE"
+    : status === "RUNNING" || status === "QUEUED"
+      ? "PROCESSING"
+      : previewsReady && !hasPlayer
+        ? "PLAYER"
+        : previewsReady && hasPlayer && !hasTarget
+          ? "TARGET"
+          : "PROCESSING";
+  const showPlayerSection = effectiveStep === "PLAYER";
+  const showTargetSection = effectiveStep === "TARGET";
+  const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue = playerSaved && targetSaved;
+  const canEnqueue = hasPlayer && hasTarget;
   const shouldPollFrames =
     Boolean(jobId) &&
-    (isExtractingPreviews || isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
+    (isExtractingPreviews || isPreviewsReady || selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
-  const showTargetSection =
-    selectionReady && isWaitingForTarget && Boolean(playerRef);
   const showPreviewFrameLoader =
     jobId &&
     !hasFullPreviewSet &&
-    (isExtractingPreviews || isWaitingForPlayer || isWaitingForTarget);
+    (isExtractingPreviews || isPreviewsReady);
   const frameSelectorKey = jobId ?? "frame-selector";
 
   const activePreviewRect = previewDragState
@@ -687,11 +692,12 @@ export default function JobRunner() {
   };
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
-    if (!hasFullPreviewSet) {
+    if (mode === "target" && !hasPlayer) {
+      setError("Save Player Box first.");
       return;
     }
-    if (mode === "target" && !playerRef) {
-      setError("Save Player Box first.");
+    if (!hasFullPreviewSet) {
+      setError("Wait for 8/8 preview frames.");
       return;
     }
     setPreviewMode(mode);
@@ -868,7 +874,7 @@ export default function JobRunner() {
   };
 
   const handleFocusStep = () => {
-    if (isWaitingForTarget) {
+    if (effectiveStep === "TARGET") {
       targetSectionRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "start"
@@ -876,7 +882,7 @@ export default function JobRunner() {
       return;
     }
 
-    if (isWaitingForPlayer) {
+    if (effectiveStep === "PLAYER") {
       playerSectionRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "start"
@@ -1072,7 +1078,7 @@ export default function JobRunner() {
               content settings.
             </div>
           ) : null}
-          {shouldSelectPlayer ? (
+          {showPlayerSection ? (
             <FrameSelector key={frameSelectorKey}>
               <p className="text-sm text-slate-400">
                 Click a preview frame to draw a bounding box around the player.
@@ -1167,13 +1173,13 @@ export default function JobRunner() {
 
         <div className="mt-6 space-y-4">
           <ProgressBar pct={pct} />
-          {isWaitingForPlayer || isWaitingForTarget ? (
+          {effectiveStep === "TARGET" || effectiveStep === "PLAYER" ? (
             <button
               type="button"
               onClick={handleFocusStep}
               className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60"
             >
-              {isWaitingForTarget && playerRef
+              {effectiveStep === "TARGET"
                 ? "Select target now"
                 : "Select player now"}
             </button>
