@@ -272,9 +272,7 @@ export default function JobRunner() {
   const [polling, setPolling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
-  const [targetSaved, setTargetSaved] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
-  const [playerSaved, setPlayerSaved] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("player-ref");
   const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
     null
@@ -328,10 +326,12 @@ export default function JobRunner() {
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
-  const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
+  const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasPlayer = Boolean(playerRef);
-  const hasTarget = Boolean(targetSelection) || Boolean(jobTargetSelection);
+  const playerSaved = Boolean(job?.playerRef);
+  const targetSaved = Boolean(job?.target?.selections?.[0]);
+  const hasPlayer = playerSaved;
+  const hasTarget = targetSaved;
   const status = job?.status ?? null;
   const previewsReady = hasFullPreviewSet;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
@@ -348,7 +348,15 @@ export default function JobRunner() {
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue = hasPlayer && hasTarget;
+  const canEnqueue =
+    playerSaved &&
+    targetSaved &&
+    (status === "WAITING_FOR_SELECTION" || status === "WAITING_FOR_PLAYER");
+  const enqueueHint = !playerSaved
+    ? "Missing Player selection"
+    : !targetSaved
+      ? "Missing Target selection"
+      : null;
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || selectionReady);
@@ -436,7 +444,7 @@ export default function JobRunner() {
       try {
         const data = await getJob(jobId);
         if (isMounted) {
-          setJob(data);
+          setJob(normalizeJob(data));
         }
       } catch (fetchError) {
         if (isMounted) {
@@ -455,13 +463,8 @@ export default function JobRunner() {
   useEffect(() => {
     if (jobTargetSelection) {
       setTargetSelection(jobTargetSelection);
-      setTargetSaved(true);
     }
   }, [jobTargetSelection]);
-
-  useEffect(() => {
-    setPlayerSaved(Boolean(playerRef));
-  }, [playerRef]);
 
   useEffect(() => {
     if (!shouldPollFrameList) {
@@ -635,12 +638,10 @@ export default function JobRunner() {
       setJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
-      setTargetSaved(false);
       setSelectionSuccess(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
-      setPlayerSaved(false);
     } catch (createError) {
       setError(toErrorMessage(createError));
     } finally {
@@ -682,7 +683,8 @@ export default function JobRunner() {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      setTargetSaved(true);
+      const updatedJob = await getJob(jobId);
+      setJob(normalizeJob(updatedJob));
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -786,7 +788,6 @@ export default function JobRunner() {
           w: width / image.clientWidth,
           h: height / image.clientHeight
         });
-        setTargetSaved(false);
       }
     }
     setPreviewDragState(null);
@@ -838,8 +839,7 @@ export default function JobRunner() {
     try {
       await saveJobPlayerRef(jobId, playerRefSelection);
       const updatedJob = await getJob(jobId);
-      setJob(updatedJob);
-      setPlayerSaved(true);
+      setJob(normalizeJob(updatedJob));
       handleClosePreview();
     } catch (saveError) {
       setPlayerRefError(toErrorMessage(saveError));
@@ -860,7 +860,7 @@ export default function JobRunner() {
     setError(null);
     try {
       const updatedJob = await getJob(jobId);
-      setJob(updatedJob);
+      setJob(normalizeJob(updatedJob));
     } catch (refreshError) {
       setError(toErrorMessage(refreshError));
     } finally {
@@ -899,7 +899,6 @@ export default function JobRunner() {
     setJobId(null);
     setJob(null);
     setTargetSelection(null);
-    setTargetSaved(false);
     setError(null);
     setSelectionError(null);
     setSelectionSuccess(null);
@@ -916,7 +915,6 @@ export default function JobRunner() {
     setPreviewPollingActive(false);
     setPreviewPollingAttempt(0);
     setPreviewImageErrors({});
-    setPlayerSaved(false);
     previewListRequestRef.current = 0;
   };
 
@@ -1028,7 +1026,7 @@ export default function JobRunner() {
             </button>
             {!canEnqueue ? (
               <p className="mt-2 text-xs text-slate-500">
-                Save Player Box and Target Box to unlock enqueue.
+                {enqueueHint ?? "Save Player Box and Target Box to unlock enqueue."}
               </p>
             ) : null}
           </div>
@@ -1070,6 +1068,22 @@ export default function JobRunner() {
               <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
               <span>Frames error: {previewError || "—"}</span>
               <span>Image errors: {previewImageErrorCount}</span>
+              <span>playerSaved: {String(playerSaved)}</span>
+              <span>targetSaved: {String(targetSaved)}</span>
+              <span>
+                playerRef(raw):{" "}
+                {JSON.stringify(
+                  job?.playerRef ??
+                    (job as any)?.player_ref ??
+                    job?.result?.playerRef ??
+                    job?.result?.player_ref ??
+                    null
+                )}
+              </span>
+              <span>
+                target(raw):{" "}
+                {JSON.stringify(job?.target ?? (job as any)?.data?.target ?? null)}
+              </span>
             </div>
           </div>
           {hasPreviewFrameErrors ? (

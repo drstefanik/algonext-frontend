@@ -138,6 +138,13 @@ const jsonHeaders = {
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
+const unwrap = <T,>(payload: unknown): T => {
+  if (payload && typeof payload === "object" && "ok" in payload && "data" in payload) {
+    return (payload as { data?: T }).data as T;
+  }
+  return payload as T;
+};
+
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
   const key = frame.key ?? `frame-${timeSec}`;
@@ -191,6 +198,40 @@ const normalizeFrameListItems = (frames: unknown): FrameItem[] => {
   return frames.map(mapFrameListItem).filter((frame) => Boolean(frame.url));
 };
 
+const mapFrameSelection = (selection: UnknownRecord): FrameSelection => {
+  const t =
+    selection.t ??
+    selection.time_sec ??
+    selection.timeSec ??
+    selection.frame_time_sec ??
+    selection.frameTimeSec ??
+    0;
+  return {
+    t,
+    x: selection.x ?? 0,
+    y: selection.y ?? 0,
+    w: selection.w ?? 0,
+    h: selection.h ?? 0
+  };
+};
+
+const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
+  const frameTimeSec =
+    selection.frameTimeSec ??
+    selection.frame_time_sec ??
+    selection.t ??
+    selection.time_sec ??
+    selection.timeSec ??
+    0;
+  return {
+    frameTimeSec,
+    x: selection.x ?? 0,
+    y: selection.y ?? 0,
+    w: selection.w ?? 0,
+    h: selection.h ?? 0
+  };
+};
+
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
   const result = job.result as UnknownRecord | undefined;
   const previewFramesSource =
@@ -203,6 +244,7 @@ const mapJobResponse = (job: UnknownRecord): JobResponse => {
 
   return {
     ...job,
+    previewFrames,
     result: result
       ? {
           ...result,
@@ -217,7 +259,39 @@ export const normalizeJob = (payload: unknown): JobResponse => {
     payload && typeof payload === "object" && "data" in payload
       ? (payload as { data?: UnknownRecord }).data ?? {}
       : (payload as UnknownRecord);
-  return mapJobResponse(normalized ?? {});
+  const data = normalized ?? {};
+  const progressSource = data.progress as UnknownRecord | undefined;
+  const rawPlayerRef = data.player_ref ?? data.playerRef ?? null;
+  const playerRef =
+    rawPlayerRef && typeof rawPlayerRef === "object"
+      ? mapFrameSelection(rawPlayerRef as UnknownRecord)
+      : null;
+  const rawTarget = data.target ?? data.data?.target ?? null;
+  const targetSelectionsSource = rawTarget?.selections ?? null;
+  const targetSelections = Array.isArray(targetSelectionsSource)
+    ? targetSelectionsSource.map(mapTargetSelection)
+    : [];
+  const target =
+    rawTarget && typeof rawTarget === "object"
+      ? {
+          ...rawTarget,
+          selections: targetSelections
+        }
+      : null;
+  const mapped: UnknownRecord = {
+    ...data,
+    createdAt: data.createdAt ?? data.created_at ?? null,
+    updatedAt: data.updatedAt ?? data.updated_at ?? null,
+    playerRef,
+    target,
+    progress: progressSource
+      ? {
+          ...progressSource,
+          updatedAt: progressSource.updatedAt ?? progressSource.updated_at ?? null
+        }
+      : data.progress
+  };
+  return mapJobResponse(mapped);
 };
 
 async function fetchWithTimeout(
@@ -363,7 +437,7 @@ export async function enqueueJob(jobId: string) {
     await handleError(response);
   }
 
-  const payload = (await response.json()) as UnknownRecord;
+  const payload = unwrap<UnknownRecord>(await response.json());
   return normalizeJob(payload);
 }
 
@@ -377,7 +451,7 @@ export async function getJob(jobId: string) {
     await handleError(response);
   }
 
-  const payload = (await response.json()) as UnknownRecord;
+  const payload = unwrap<UnknownRecord>(await response.json());
   const mapped = normalizeJob(payload);
   console.log("Mapped job response", mapped);
   return mapped;
@@ -416,16 +490,12 @@ export async function listJobFrames(jobId: string) {
     await handleError(response);
   }
 
-  const payload = await response.json().catch(() => null);
+  const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
+    await response.json().catch(() => null)
+  );
   const itemsSource = Array.isArray(payload)
     ? payload
-    : payload?.items ??
-      payload?.frames ??
-      payload?.data?.items ??
-      payload?.data?.frames ??
-      payload?.data?.data?.items ??
-      payload?.data?.data?.frames ??
-      [];
+    : payload?.items ?? payload?.frames ?? [];
 
   return {
     ok: true,
@@ -449,7 +519,10 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
     await handleError(response);
   }
 
-  return response;
+  const responsePayload = unwrap<UnknownRecord | null>(
+    await response.json().catch(() => null)
+  );
+  return responsePayload;
 }
 
 export async function saveJobTargetSelection(
@@ -476,5 +549,8 @@ export async function saveJobTargetSelection(
     await handleError(response);
   }
 
-  return response;
+  const responsePayload = unwrap<UnknownRecord | null>(
+    await response.json().catch(() => null)
+  );
+  return responsePayload;
 }
