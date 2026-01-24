@@ -330,12 +330,15 @@ export default function JobRunner() {
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? job?.result?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const isWaitingForPlayer = job?.status === "WAITING_FOR_PLAYER";
-  const isWaitingForTarget = job?.status === "WAITING_FOR_SELECTION";
+  const status = job?.status ?? null;
+  const isWaitingGeneric =
+    status === "WAITING_FOR_SELECTION" || status === "WAITING_FOR_PLAYER";
+  const isWaitingForPlayer = isWaitingGeneric && !playerRef;
+  const isWaitingForTarget = isWaitingGeneric && Boolean(playerRef);
   const selectionReady =
     hasFullPreviewSet && (isWaitingForPlayer || isWaitingForTarget);
   const shouldSelectPlayer =
-    hasFullPreviewSet && job?.status === "WAITING_FOR_PLAYER" && !playerRef;
+    hasFullPreviewSet && !playerRef && isWaitingForPlayer;
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = playerSaved && targetSaved;
@@ -343,7 +346,8 @@ export default function JobRunner() {
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || isWaitingForPlayer || isWaitingForTarget);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
-  const showTargetSection = selectionReady && isWaitingForTarget;
+  const showTargetSection =
+    selectionReady && isWaitingForTarget && Boolean(playerRef);
   const showPreviewFrameLoader =
     jobId &&
     !hasFullPreviewSet &&
@@ -684,6 +688,10 @@ export default function JobRunner() {
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
     if (!hasFullPreviewSet) {
+      return;
+    }
+    if (mode === "target" && !playerRef) {
+      setError("Save Player Box first.");
       return;
     }
     setPreviewMode(mode);
@@ -1165,7 +1173,9 @@ export default function JobRunner() {
               onClick={handleFocusStep}
               className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60"
             >
-              {isWaitingForTarget ? "Select target now" : "Select player now"}
+              {isWaitingForTarget && playerRef
+                ? "Select target now"
+                : "Select player now"}
             </button>
           ) : null}
 
