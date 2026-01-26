@@ -273,6 +273,7 @@ export default function JobRunner() {
   const [submitting, setSubmitting] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
+  const [gridMode, setGridMode] = useState<PreviewMode>("player-ref");
   const [previewMode, setPreviewMode] = useState<PreviewMode>("player-ref");
   const [selectedPreviewFrame, setSelectedPreviewFrame] = useState<PreviewFrame | null>(
     null
@@ -280,6 +281,8 @@ export default function JobRunner() {
   const [playerRefSelection, setPlayerRefSelection] = useState<FrameSelection | null>(
     null
   );
+  const [playerSaved, setPlayerSaved] = useState(false);
+  const [targetSaved, setTargetSaved] = useState(false);
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
@@ -300,7 +303,6 @@ export default function JobRunner() {
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const playerSectionRef = useRef<HTMLElement | null>(null);
-  const targetSectionRef = useRef<HTMLDivElement | null>(null);
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -328,8 +330,6 @@ export default function JobRunner() {
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const playerSaved = Boolean(job?.playerRef);
-  const targetSaved = Boolean(job?.target?.selections?.[0]);
   const hasPlayer = playerSaved;
   const hasTarget = targetSaved;
   const status = job?.status ?? null;
@@ -356,15 +356,11 @@ export default function JobRunner() {
     ? "Missing Player selection"
     : !targetSaved
       ? "Missing Target selection"
-      : null;
+      : "Ready";
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
-  const showPreviewFrameLoader =
-    jobId &&
-    !hasFullPreviewSet &&
-    (isExtractingPreviews || isPreviewsReady);
   const frameSelectorKey = jobId ?? "frame-selector";
 
   const activePreviewRect = previewDragState
@@ -465,6 +461,11 @@ export default function JobRunner() {
       setTargetSelection(jobTargetSelection);
     }
   }, [jobTargetSelection]);
+
+  useEffect(() => {
+    setPlayerSaved(Boolean(job?.playerRef));
+    setTargetSaved(Boolean(job?.target?.selections?.length));
+  }, [job?.playerRef, job?.target?.selections?.length]);
 
   useEffect(() => {
     if (!shouldPollFrameList) {
@@ -642,6 +643,9 @@ export default function JobRunner() {
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
+      setPlayerSaved(false);
+      setTargetSaved(false);
+      setGridMode("player-ref");
     } catch (createError) {
       setError(toErrorMessage(createError));
     } finally {
@@ -683,8 +687,9 @@ export default function JobRunner() {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      const updatedJob = await getJob(jobId);
-      setJob(normalizeJob(updatedJob));
+      const updatedJob = normalizeJob(await getJob(jobId));
+      setJob(updatedJob);
+      setTargetSaved(Boolean(updatedJob.target?.selections?.length));
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -838,8 +843,9 @@ export default function JobRunner() {
     setSavingPlayerRef(true);
     try {
       await saveJobPlayerRef(jobId, playerRefSelection);
-      const updatedJob = await getJob(jobId);
-      setJob(normalizeJob(updatedJob));
+      const updatedJob = normalizeJob(await getJob(jobId));
+      setJob(updatedJob);
+      setPlayerSaved(Boolean(updatedJob.playerRef));
       handleClosePreview();
     } catch (saveError) {
       setPlayerRefError(toErrorMessage(saveError));
@@ -875,7 +881,8 @@ export default function JobRunner() {
 
   const handleFocusStep = () => {
     if (effectiveStep === "TARGET") {
-      targetSectionRef.current?.scrollIntoView({
+      setGridMode("target");
+      playerSectionRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "start"
       });
@@ -908,6 +915,9 @@ export default function JobRunner() {
     setSavingPlayerRef(false);
     setSelectedPreviewFrame(null);
     setPlayerRefSelection(null);
+    setPlayerSaved(false);
+    setTargetSaved(false);
+    setGridMode("player-ref");
     setPreviewDragState(null);
     setPreviewFrames([]);
     setFramesFrozen(false);
@@ -916,6 +926,14 @@ export default function JobRunner() {
     setPreviewPollingAttempt(0);
     setPreviewImageErrors({});
     previewListRequestRef.current = 0;
+  };
+
+  const handleSelectTargetFromFrames = () => {
+    setGridMode("target");
+    playerSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
   };
 
   return (
@@ -1024,11 +1042,7 @@ export default function JobRunner() {
             >
               {submitting ? "Enqueueing..." : "Enqueue"}
             </button>
-            {!canEnqueue ? (
-              <p className="mt-2 text-xs text-slate-500">
-                {enqueueHint ?? "Save Player Box and Target Box to unlock enqueue."}
-              </p>
-            ) : null}
+            <p className="mt-2 text-xs text-slate-500">{enqueueHint}</p>
           </div>
         ) : null}
 
@@ -1092,79 +1106,117 @@ export default function JobRunner() {
               content settings.
             </div>
           ) : null}
-          {showPlayerSection ? (
-            <FrameSelector key={frameSelectorKey}>
-              <p className="text-sm text-slate-400">
-                Click a preview frame to draw a bounding box around the player.
-              </p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {resolvedPreviewFrames.map((frame, index) => (
-                  <button
-                    key={`${frame.key}-${index}`}
-                    type="button"
-                    onClick={() => handleOpenPreview(frame, "player-ref")}
-                    className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-emerald-400/60"
-                  >
-                    {previewImageErrors[frame.key] ? (
-                      <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
-                        Image blocked
+          {jobId ? (
+            previewsReady ? (
+              <FrameSelector key={frameSelectorKey}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm text-slate-400">
+                    {gridMode === "player-ref"
+                      ? "Click a preview frame to draw a bounding box around the player."
+                      : "Click a preview frame to draw a bounding box around the target."}
+                  </p>
+                  <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setGridMode("player-ref")}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition ${
+                        gridMode === "player-ref"
+                          ? "bg-emerald-400 text-slate-950"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      Player
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGridMode("target")}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition ${
+                        gridMode === "target"
+                          ? "bg-amber-300 text-slate-950"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      Target
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {resolvedPreviewFrames.map((frame, index) => (
+                    <button
+                      key={`${frame.key}-${index}`}
+                      type="button"
+                      onClick={() => handleOpenPreview(frame, gridMode)}
+                      className={`group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition ${
+                        gridMode === "target"
+                          ? "hover:border-amber-300/70"
+                          : "hover:border-emerald-400/60"
+                      }`}
+                    >
+                      {previewImageErrors[frame.key] ? (
+                        <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
+                          Image blocked
+                        </div>
+                      ) : (
+                        <img
+                          src={getPreviewFrameSrc(frame)}
+                          alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
+                          className="h-32 w-full object-cover"
+                          onLoad={() => handlePreviewImageLoad(frame)}
+                          onError={() => handlePreviewImageError(frame, "player-grid")}
+                        />
+                      )}
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
+                          t={frame.timeSec.toFixed(2)}s
+                        </p>
                       </div>
-                    ) : (
-                      <img
-                        src={getPreviewFrameSrc(frame)}
-                        alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
-                        className="h-32 w-full object-cover"
-                        onLoad={() => handlePreviewImageLoad(frame)}
-                        onError={() => handlePreviewImageError(frame, "player-grid")}
-                      />
-                    )}
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                        t={frame.timeSec.toFixed(2)}s
-                      </p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500">
+                  You will be asked to draw one bounding box in the full-size view.
+                </p>
+              </FrameSelector>
+            ) : (
+              <div className="space-y-3 text-sm text-slate-400">
+                {playerRef ? (
+                  <p>Player reference already saved.</p>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                      <span>
+                        {previewPollingActive
+                          ? "Preview frames are loading."
+                          : "Waiting for previews."}
+                      </span>
                     </div>
-                  </button>
-                ))}
+                    {previewPollingError ? (
+                      <p className="text-xs text-rose-200">{previewPollingError}</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={
+                        previewPollingError
+                          ? handleRetryPreviewPolling
+                          : handleRefreshJob
+                      }
+                      disabled={previewPollingError ? false : refreshingFrames}
+                      className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {previewPollingError
+                        ? "Retry polling"
+                        : refreshingFrames
+                        ? "Refreshing..."
+                        : "Retry"}
+                    </button>
+                  </>
+                )}
               </div>
-              <p className="text-xs text-slate-500">
-                You will be asked to draw one bounding box in the full-size view.
-              </p>
-            </FrameSelector>
+            )
           ) : (
             <div className="space-y-3 text-sm text-slate-400">
-              {playerRef ? (
-                <p>Player reference already saved.</p>
-              ) : jobId ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                    <span>
-                      {previewPollingActive
-                        ? "Preview frames are loading."
-                        : "Waiting for previews."}
-                    </span>
-                  </div>
-                  {previewPollingError ? (
-                    <p className="text-xs text-rose-200">{previewPollingError}</p>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={
-                      previewPollingError ? handleRetryPreviewPolling : handleRefreshJob
-                    }
-                    disabled={previewPollingError ? false : refreshingFrames}
-                    className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {previewPollingError
-                      ? "Retry polling"
-                      : refreshingFrames
-                      ? "Refreshing..."
-                      : "Retry"}
-                  </button>
-                </>
-              ) : (
-                <p>Create a job to load preview frames.</p>
-              )}
+              <p>Create a job to load preview frames.</p>
             </div>
           )}
         </div>
@@ -1255,145 +1307,59 @@ export default function JobRunner() {
           </div>
         </div>
 
-        {showTargetSection ? (
-          <FrameSelector key={frameSelectorKey}>
-            <div
-              ref={targetSectionRef}
-              className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6"
-            >
-              <div className="flex flex-col gap-2">
-                <h3 className="text-lg font-semibold text-white">
-                  Select target (1 box)
-                </h3>
+        {jobId ? (
+          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Target</h3>
                 <p className="text-sm text-slate-400">
-                  Choose one preview frame and draw a bounding box around the
-                  target player.
+                  {targetSaved ? "Target saved" : "Missing target"}
                 </p>
               </div>
-              {hasPreviewFrameErrors ? (
-                <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                  Images blocked or failed to load. Check the frame proxy or mixed
-                  content settings.
-                </div>
-              ) : null}
-
-              <div className="mt-4 space-y-4">
-                {!hasFullPreviewSet ? (
-                  <div className="space-y-3 text-sm text-slate-400">
-                    {showPreviewFrameLoader ? (
-                      <div className="flex items-center gap-2">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300" />
-                        <span>
-                          {previewPollingActive
-                            ? "Preview frames are loading."
-                            : "Waiting for previews."}
-                        </span>
-                      </div>
-                    ) : (
-                      <p>No frames yet.</p>
-                    )}
-                    {previewPollingError ? (
-                      <p className="text-xs text-rose-200">
-                        {previewPollingError}
-                      </p>
-                    ) : null}
-                    {jobId ? (
-                      <button
-                        type="button"
-                        onClick={
-                          previewPollingError
-                            ? handleRetryPreviewPolling
-                            : handleRefreshJob
-                        }
-                        disabled={previewPollingError ? false : refreshingFrames}
-                        className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {previewPollingError
-                          ? "Retry polling"
-                          : refreshingFrames
-                          ? "Refreshing..."
-                          : "Retry"}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {resolvedPreviewFrames.map((frame, index) => {
-                      const isSelected =
-                        targetSelection?.frameTimeSec === frame.timeSec;
-                      return (
-                        <button
-                          key={`${frame.key}-${index}`}
-                          type="button"
-                          onClick={() => handleOpenPreview(frame, "target")}
-                          className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition hover:border-amber-300/70"
-                        >
-                          {previewImageErrors[frame.key] ? (
-                            <div className="flex h-36 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
-                              Image blocked
-                            </div>
-                          ) : (
-                            <img
-                              src={getPreviewFrameSrc(frame)}
-                              alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
-                              className="h-36 w-full object-cover"
-                              onLoad={() => handlePreviewImageLoad(frame)}
-                              onError={() => handlePreviewImageError(frame, "target-grid")}
-                            />
-                          )}
-                          {isSelected && targetSelection ? (
-                            <div className="pointer-events-none absolute inset-0">
-                              <div
-                                className="absolute rounded border border-amber-400 bg-amber-400/20"
-                                style={{
-                                  left: `${targetSelection.x * 100}%`,
-                                  top: `${targetSelection.y * 100}%`,
-                                  width: `${targetSelection.w * 100}%`,
-                                  height: `${targetSelection.h * 100}%`
-                                }}
-                              />
-                            </div>
-                          ) : null}
-                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
-                            <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                              t={frame.timeSec.toFixed(2)}s
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleSaveSelection}
-                    disabled={savingSelection || !targetSelection}
-                    className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {savingSelection ? "Saving..." : "Save selection"}
-                  </button>
-                  <span className="text-xs text-slate-500">
-                    {targetSelection
-                      ? "Ready to save selection."
-                      : "Select one box to continue."}
-                  </span>
-                </div>
-              </div>
-
-              {selectionError ? (
-                <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-                  {selectionError}
-                </div>
-              ) : null}
-              {selectionSuccess ? (
-                <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                  {selectionSuccess}
-                </div>
+              {gridMode === "target" ? (
+                <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                  Target mode on
+                </span>
               ) : null}
             </div>
-          </FrameSelector>
+
+            <div className="mt-4 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={handleSelectTargetFromFrames}
+                disabled={!previewsReady}
+                className="rounded-lg border border-amber-300/40 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Select target from frames
+              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveSelection}
+                  disabled={savingSelection || !targetSelection}
+                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingSelection ? "Saving..." : "Save selection"}
+                </button>
+                <span className="text-xs text-slate-500">
+                  {targetSelection
+                    ? "Ready to save selection."
+                    : "Select one box to continue."}
+                </span>
+              </div>
+            </div>
+
+            {selectionError ? (
+              <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                {selectionError}
+              </div>
+            ) : null}
+            {selectionSuccess ? (
+              <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                {selectionSuccess}
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {job && job.status === "COMPLETED" ? <ResultView job={job} /> : null}
