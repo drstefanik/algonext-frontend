@@ -110,7 +110,8 @@ export type JobFrameListResponse = {
 };
 
 export type FrameSelection = {
-  t: number;
+  frameTimeSec: number;
+  t?: number;
   x: number;
   y: number;
   w: number;
@@ -205,15 +206,30 @@ const normalizePlayerRef = (raw: unknown): FrameSelection | null => {
 
   if (typeof raw === "string") {
     try {
-      const parsed = JSON.parse(raw) as FrameSelection;
-      return parsed;
+      const parsed = JSON.parse(raw) as UnknownRecord;
+      return normalizePlayerRef(parsed);
     } catch {
       return null;
     }
   }
 
   if (typeof raw === "object" && "x" in raw && "y" in raw) {
-    return raw as FrameSelection;
+    const source = raw as UnknownRecord;
+    const frameTimeSec =
+      source.frameTimeSec ??
+      source.frame_time_sec ??
+      source.t ??
+      source.time_sec ??
+      source.timeSec ??
+      0;
+    return {
+      frameTimeSec,
+      t: source.t ?? frameTimeSec,
+      x: source.x ?? 0,
+      y: source.y ?? 0,
+      w: source.w ?? 0,
+      h: source.h ?? 0
+    };
   }
 
   return null;
@@ -509,11 +525,20 @@ export async function getJobFramesList(jobId: string) {
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
+  const frameTimeSec = payload.frameTimeSec ?? payload.t ?? 0;
+  const requestPayload = {
+    frameTimeSec,
+    t: frameTimeSec,
+    x: payload.x,
+    y: payload.y,
+    w: payload.w,
+    h: payload.h
+  };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/player-ref`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(requestPayload)
   });
 
   if (!response.ok) {
@@ -532,7 +557,8 @@ export async function saveJobTargetSelection(
 ) {
   const requestPayload = {
     selections: payload.selections.map((selection) => ({
-      frame_time_sec: selection.frameTimeSec,
+      frameTimeSec: selection.frameTimeSec,
+      t: selection.frameTimeSec,
       x: selection.x,
       y: selection.y,
       w: selection.w,
