@@ -16,6 +16,8 @@ const HOP_BY_HOP = new Set([
   "content-length"
 ]);
 
+const PASSTHROUGH_HEADERS = new Set(["content-type", "cache-control"]);
+
 export async function forward(
   request: Request,
   targetUrl: string,
@@ -39,15 +41,15 @@ export async function forward(
       cache: "no-store",
     });
 
-    const upstreamContentType =
-      upstreamResponse.headers.get("content-type") ?? "text/plain; charset=utf-8";
     const responseBody = await upstreamResponse.text();
 
-    const resHeaders = new Headers(upstreamResponse.headers);
-    resHeaders.set("content-type", upstreamContentType);
-    resHeaders.set("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    resHeaders.set("pragma", "no-cache");
-    resHeaders.set("expires", "0");
+    const resHeaders = new Headers();
+    upstreamResponse.headers.forEach((value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (!HOP_BY_HOP.has(lowerKey) && PASSTHROUGH_HEADERS.has(lowerKey)) {
+        resHeaders.set(key, value);
+      }
+    });
 
     return new Response(responseBody, {
       status: upstreamResponse.status,
