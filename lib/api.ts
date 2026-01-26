@@ -198,21 +198,25 @@ const normalizeFrameListItems = (frames: unknown): FrameItem[] => {
   return frames.map(mapFrameListItem).filter((frame) => Boolean(frame.url));
 };
 
-const mapFrameSelection = (selection: UnknownRecord): FrameSelection => {
-  const t =
-    selection.t ??
-    selection.time_sec ??
-    selection.timeSec ??
-    selection.frame_time_sec ??
-    selection.frameTimeSec ??
-    0;
-  return {
-    t,
-    x: selection.x ?? 0,
-    y: selection.y ?? 0,
-    w: selection.w ?? 0,
-    h: selection.h ?? 0
-  };
+const normalizePlayerRef = (raw: unknown): FrameSelection | null => {
+  if (!raw) {
+    return null;
+  }
+
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as FrameSelection;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof raw === "object" && "x" in raw && "y" in raw) {
+    return raw as FrameSelection;
+  }
+
+  return null;
 };
 
 const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
@@ -262,10 +266,7 @@ export const normalizeJob = (payload: unknown): JobResponse => {
   const data = normalized ?? {};
   const progressSource = data.progress as UnknownRecord | undefined;
   const rawPlayerRef = data.player_ref ?? data.playerRef ?? null;
-  const playerRef =
-    rawPlayerRef && typeof rawPlayerRef === "object"
-      ? mapFrameSelection(rawPlayerRef as UnknownRecord)
-      : null;
+  const playerRef = normalizePlayerRef(rawPlayerRef);
   const rawTarget = data.target ?? data.data?.target ?? null;
   const targetSelectionsSource = rawTarget?.selections ?? null;
   const targetSelections = Array.isArray(targetSelectionsSource)

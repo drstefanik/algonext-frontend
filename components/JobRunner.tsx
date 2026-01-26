@@ -330,8 +330,9 @@ export default function JobRunner() {
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasPlayer = playerSaved;
-  const hasTarget = targetSaved;
+  const hasPlayer = Boolean(job?.playerRef);
+  const hasTarget =
+    Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
   const status = job?.status ?? null;
   const previewsReady = hasFullPreviewSet;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
@@ -349,9 +350,7 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue =
-    playerSaved &&
-    targetSaved &&
-    (status === "WAITING_FOR_SELECTION" || status === "WAITING_FOR_PLAYER");
+    Boolean(job?.playerRef) && Boolean(job?.target?.selections?.length);
   const enqueueHint = !playerSaved
     ? "Missing Player selection"
     : !targetSaved
@@ -687,9 +686,8 @@ export default function JobRunner() {
       await saveJobTargetSelection(jobId, {
         selections: [targetSelection]
       });
-      const updatedJob = normalizeJob(await getJob(jobId));
+      const updatedJob = await getJob(jobId);
       setJob(updatedJob);
-      setTargetSaved(Boolean(updatedJob.target?.selections?.length));
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -843,9 +841,8 @@ export default function JobRunner() {
     setSavingPlayerRef(true);
     try {
       await saveJobPlayerRef(jobId, playerRefSelection);
-      const updatedJob = normalizeJob(await getJob(jobId));
+      const updatedJob = await getJob(jobId);
       setJob(updatedJob);
-      setPlayerSaved(Boolean(updatedJob.playerRef));
       handleClosePreview();
     } catch (saveError) {
       setPlayerRefError(toErrorMessage(saveError));
