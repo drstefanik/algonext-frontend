@@ -111,6 +111,7 @@ export type JobFrameListResponse = {
 
 export type FrameSelection = {
   frameTimeSec: number | null;
+  frame_time_sec?: number | null;
   t?: number;
   x: number;
   y: number;
@@ -120,6 +121,7 @@ export type FrameSelection = {
 
 export type TargetSelection = {
   frameTimeSec: number | null;
+  frame_time_sec?: number | null;
   x: number;
   y: number;
   w: number;
@@ -540,7 +542,7 @@ export async function getJobFramesList(jobId: string) {
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
-  const frameTimeSec = payload.frameTimeSec ?? payload.t ?? null;
+  const frameTimeSec = payload.frameTimeSec ?? payload.frame_time_sec ?? payload.t ?? null;
   if (frameTimeSec === null || frameTimeSec === undefined) {
     throw new Error("Missing frame time from preview frame. Check /frames/list mapping.");
   }
@@ -576,12 +578,13 @@ export async function saveJobTargetSelection(
 ) {
   const requestPayload = {
     selections: payload.selections.map((selection) => ({
-      frameTimeSec: selection.frameTimeSec,
-      t: selection.frameTimeSec,
-      x: selection.x,
-      y: selection.y,
-      w: selection.w,
-      h: selection.h
+      frame_time_sec: selection.frameTimeSec ?? selection.frame_time_sec ?? null,
+      bbox_xywh: {
+        x: selection.x,
+        y: selection.y,
+        w: selection.w,
+        h: selection.h
+      }
     }))
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/target`, {
