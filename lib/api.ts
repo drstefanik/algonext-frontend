@@ -576,17 +576,18 @@ export async function saveJobTargetSelection(
   jobId: string,
   payload: { selections: TargetSelection[] }
 ) {
-  const requestPayload = {
-    selections: payload.selections.map((selection) => ({
-      frame_time_sec: selection.frameTimeSec ?? selection.frame_time_sec ?? null,
-      bbox_xywh: {
-        x: selection.x,
-        y: selection.y,
-        w: selection.w,
-        h: selection.h
-      }
-    }))
-  };
+  const selections = payload.selections.map((selection) => {
+    const frameTimeSec = selection.frameTimeSec ?? selection.frame_time_sec ?? null;
+    return {
+      frame_time_sec: frameTimeSec,
+      x: selection.x,
+      y: selection.y,
+      w: selection.w,
+      h: selection.h
+    };
+  });
+  const requestPayload = { selections };
+  console.info("[target] payload", requestPayload);
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/target`, {
     method: "POST",
     headers: jsonHeaders,
