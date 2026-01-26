@@ -776,6 +776,7 @@ export default function JobRunner() {
     if (width > 1 && height > 1) {
       if (previewMode === "player-ref") {
         setPlayerRefSelection({
+          frameTimeSec: selectedPreviewFrame.timeSec,
           t: selectedPreviewFrame.timeSec,
           x: left / image.clientWidth,
           y: top / image.clientHeight,
@@ -840,7 +841,27 @@ export default function JobRunner() {
     setPlayerRefError(null);
     setSavingPlayerRef(true);
     try {
-      await saveJobPlayerRef(jobId, playerRefSelection);
+      const response = await saveJobPlayerRef(jobId, playerRefSelection);
+      const responseSource =
+        response && typeof response === "object" && "data" in response
+          ? (response as { data?: unknown }).data
+          : response;
+      if (
+        responseSource &&
+        typeof responseSource === "object" &&
+        ("player_ref" in responseSource || "playerRef" in responseSource)
+      ) {
+        const playerRefValue =
+          (responseSource as { player_ref?: unknown }).player_ref ??
+          (responseSource as { playerRef?: unknown }).playerRef ??
+          null;
+        if (playerRefValue === null) {
+          setPlayerRefError(
+            "Backend did not persist player_ref (null). Check payload keys."
+          );
+          return;
+        }
+      }
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
       handleClosePreview();
