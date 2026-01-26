@@ -32,11 +32,32 @@ const REQUIRED_FRAME_COUNT = 8;
 
 const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
 
+const coerceNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const formatFrameTime = (timeSec: number | null) =>
+  timeSec === null ? "—" : `${timeSec.toFixed(2)}s`;
+
+const formatFrameAlt = (timeSec: number | null) =>
+  timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
+
 const mapFrameItemToPreviewFrame = (
   frame: FrameItem,
   index: number
 ): PreviewFrame => {
-  const timeSec = frame.time_sec ?? 0;
+  const timeSec = coerceNumber(frame.time_sec);
   const key = frame.key ?? `frame-${timeSec}-${index}`;
   return {
     timeSec,
@@ -777,7 +798,6 @@ export default function JobRunner() {
       if (previewMode === "player-ref") {
         setPlayerRefSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
-          t: selectedPreviewFrame.timeSec,
           x: left / image.clientWidth,
           y: top / image.clientHeight,
           w: width / image.clientWidth,
@@ -953,6 +973,10 @@ export default function JobRunner() {
       block: "start"
     });
   };
+
+  const playerRefMissingTime = playerRefSelection?.frameTimeSec == null;
+  const targetMissingTime = targetSelection?.frameTimeSec == null;
+  const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
@@ -1177,7 +1201,7 @@ export default function JobRunner() {
                       ) : (
                         <img
                           src={getPreviewFrameSrc(frame)}
-                          alt={`Preview frame at ${frame.timeSec.toFixed(2)}s`}
+                          alt={formatFrameAlt(frame.timeSec)}
                           className="h-32 w-full object-cover"
                           onLoad={() => handlePreviewImageLoad(frame)}
                           onError={() => handlePreviewImageError(frame, "player-grid")}
@@ -1185,7 +1209,7 @@ export default function JobRunner() {
                       )}
                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
                         <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                          t={frame.timeSec.toFixed(2)}s
+                          t={formatFrameTime(frame.timeSec)}
                         </p>
                       </div>
                     </button>
@@ -1354,13 +1378,15 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={handleSaveSelection}
-                  disabled={savingSelection || !targetSelection}
+                  disabled={savingSelection || !targetSelection || targetMissingTime}
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Saving..." : "Save selection"}
                 </button>
                 <span className="text-xs text-slate-500">
-                  {targetSelection
+                  {targetMissingTime
+                    ? "Frame missing time_sec."
+                    : targetSelection
                     ? "Ready to save selection."
                     : "Select one box to continue."}
                 </span>
@@ -1436,7 +1462,7 @@ export default function JobRunner() {
                 <img
                   ref={previewImageRef}
                   src={getPreviewFrameSrc(selectedPreviewFrame)}
-                  alt={`Preview frame at ${selectedPreviewFrame.timeSec.toFixed(2)}s`}
+                  alt={formatFrameAlt(selectedPreviewFrame.timeSec)}
                   className="h-auto w-full select-none"
                   draggable={false}
                   onLoad={() => handlePreviewImageLoad(selectedPreviewFrame)}
@@ -1484,7 +1510,9 @@ export default function JobRunner() {
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
               <span className="text-xs text-slate-400">
-                {previewMode === "player-ref" && playerRefSelection
+                {selectedFrameMissingTime
+                  ? "Frame missing time_sec."
+                  : previewMode === "player-ref" && playerRefSelection
                   ? "Bounding box ready. Save to continue."
                   : previewMode === "target" && targetSelection
                   ? "Bounding box ready. Save to continue."
@@ -1496,7 +1524,7 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={handleSavePlayerRef}
-                  disabled={!playerRefSelection || savingPlayerRef}
+                  disabled={!playerRefSelection || savingPlayerRef || playerRefMissingTime}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingPlayerRef ? "Saving..." : "Save selection"}

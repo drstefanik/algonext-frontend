@@ -54,7 +54,7 @@ export type JobClip = {
 };
 
 export type PreviewFrame = {
-  timeSec: number;
+  timeSec: number | null;
   key: string;
   url?: string;
   signedUrl: string;
@@ -110,7 +110,7 @@ export type JobFrameListResponse = {
 };
 
 export type FrameSelection = {
-  frameTimeSec: number;
+  frameTimeSec: number | null;
   t?: number;
   x: number;
   y: number;
@@ -119,7 +119,7 @@ export type FrameSelection = {
 };
 
 export type TargetSelection = {
-  frameTimeSec: number;
+  frameTimeSec: number | null;
   x: number;
   y: number;
   w: number;
@@ -139,6 +139,21 @@ const jsonHeaders = {
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
+const coerceNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const unwrap = <T,>(payload: unknown): T => {
   if (payload && typeof payload === "object" && "ok" in payload && "data" in payload) {
     return (payload as { data?: T }).data as T;
@@ -147,7 +162,7 @@ const unwrap = <T,>(payload: unknown): T => {
 };
 
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
-  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? 0;
+  const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
   const key = frame.key ?? `frame-${timeSec}`;
   const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
   const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
@@ -166,7 +181,7 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
 };
 
 const mapFrameListItem = (frame: UnknownRecord): FrameItem => {
-  const timeSec = frame.timeSec ?? frame.time_sec ?? frame.t ?? null;
+  const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
   const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec ?? 0}`;
   const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
   const width = frame.width ?? frame.w ?? null;
@@ -215,16 +230,16 @@ const normalizePlayerRef = (raw: unknown): FrameSelection | null => {
 
   if (typeof raw === "object" && "x" in raw && "y" in raw) {
     const source = raw as UnknownRecord;
-    const frameTimeSec =
+    const frameTimeSec = coerceNumber(
       source.frameTimeSec ??
-      source.frame_time_sec ??
-      source.t ??
-      source.time_sec ??
-      source.timeSec ??
-      0;
+        source.frame_time_sec ??
+        source.t ??
+        source.time_sec ??
+        source.timeSec
+    );
     return {
       frameTimeSec,
-      t: source.t ?? frameTimeSec,
+      t: coerceNumber(source.t ?? frameTimeSec) ?? undefined,
       x: source.x ?? 0,
       y: source.y ?? 0,
       w: source.w ?? 0,
@@ -236,13 +251,13 @@ const normalizePlayerRef = (raw: unknown): FrameSelection | null => {
 };
 
 const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
-  const frameTimeSec =
+  const frameTimeSec = coerceNumber(
     selection.frameTimeSec ??
-    selection.frame_time_sec ??
-    selection.t ??
-    selection.time_sec ??
-    selection.timeSec ??
-    0;
+      selection.frame_time_sec ??
+      selection.t ??
+      selection.time_sec ??
+      selection.timeSec
+  );
   return {
     frameTimeSec,
     x: selection.x ?? 0,
@@ -525,10 +540,12 @@ export async function getJobFramesList(jobId: string) {
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
-  const frameTimeSec = payload.frameTimeSec ?? payload.t ?? 0;
+  const frameTimeSec = payload.frameTimeSec ?? payload.t ?? null;
+  if (frameTimeSec === null || frameTimeSec === undefined) {
+    throw new Error("Missing frame time from preview frame. Check /frames/list mapping.");
+  }
   const requestPayload = {
     frameTimeSec,
-    t: frameTimeSec,
     x: payload.x,
     y: payload.y,
     w: payload.w,
