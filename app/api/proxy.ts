@@ -37,7 +37,7 @@ export async function forward(
     const upstreamResponse = await fetch(targetUrl, {
       method: methodOverride ?? request.method,
       headers,
-      body: bodyText,
+      body: bodyText && includeBody ? bodyText : undefined,
       cache: "no-store",
     });
 
