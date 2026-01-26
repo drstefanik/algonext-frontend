@@ -21,6 +21,7 @@ export type JobStatus =
   | "QUEUED"
   | "RUNNING"
   | "COMPLETED"
+  | "PARTIAL"
   | "FAILED"
   | "WAITING_FOR_SELECTION"
   | "WAITING_FOR_PLAYER"
@@ -77,9 +78,13 @@ export type JobResult = {
   radar?: Record<string, number>;
   assets?: {
     inputVideo?: JobAssetVideo;
+    inputVideoUrl?: string;
+    input_video_url?: string;
+    clips?: JobClip[];
   };
   clips?: JobClip[];
   previewFrames?: PreviewFrame[];
+  warnings?: unknown[];
   [key: string]: any;
 };
 
@@ -92,6 +97,7 @@ export type JobResponse = {
   playerRef?: FrameSelection;
   target?: JobTarget;
   error?: string;
+  warnings?: unknown[];
   createdAt?: string;
   updatedAt?: string;
   videoUrl?: string;

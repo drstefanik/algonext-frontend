@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
+import { extractWarnings } from "@/lib/warnings";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
@@ -263,6 +264,7 @@ const statusStyles: Record<string, string> = {
   WAITING_FOR_PLAYER: "bg-amber-500/20 text-amber-200",
   RUNNING: "bg-blue-500/20 text-blue-200",
   COMPLETED: "bg-emerald-500/20 text-emerald-200",
+  PARTIAL: "bg-amber-400/20 text-amber-200",
   FAILED: "bg-rose-500/20 text-rose-200"
 };
 
@@ -291,6 +293,7 @@ export default function JobRunner() {
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  const [pollingTimedOut, setPollingTimedOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
@@ -324,6 +327,7 @@ export default function JobRunner() {
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const playerSectionRef = useRef<HTMLElement | null>(null);
+  const pollStartRef = useRef<number | null>(null);
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -331,8 +335,10 @@ export default function JobRunner() {
   const displayStatusLabelMap: Record<string, string> = {
     WAITING_FOR_PLAYER: "Select player",
     WAITING_FOR_SELECTION: "Select target",
-    RUNNING: "running",
-    COMPLETED: "completed"
+    RUNNING: "Running",
+    COMPLETED: "Completed",
+    PARTIAL: "Completed (partial)",
+    FAILED: "Failed"
   };
   const displayStatusLabel =
     displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
@@ -355,6 +361,26 @@ export default function JobRunner() {
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
   const status = job?.status ?? null;
+  const warningsPayload =
+    job?.result?.warnings ??
+    job?.warnings ??
+    (job && typeof job === "object"
+      ? (job as { data?: { warnings?: unknown[] } }).data?.warnings
+      : null) ??
+    null;
+  const { messages: warningMessages } = extractWarnings(warningsPayload);
+  const hasWarnings = warningMessages.length > 0;
+  const inputVideoUrl =
+    job?.result?.assets?.inputVideoUrl ??
+    job?.result?.assets?.input_video_url ??
+    job?.result?.assets?.inputVideo?.signedUrl ??
+    job?.result?.assets?.input_video?.signedUrl ??
+    null;
+  const clipsCount =
+    job?.result?.clips?.length ??
+    job?.result?.assets?.clips?.length ??
+    0;
+  const radarKeysCount = Object.keys(job?.result?.radar ?? {}).length;
   const previewsReady = hasFullPreviewSet;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
     ? "IDLE"
@@ -428,25 +454,67 @@ export default function JobRunner() {
       return;
     }
 
-    const interval = setInterval(async () => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
+
+    const getPollInterval = (step?: string | null) => {
+      if (!step) {
+        return 3000;
+      }
+      if (step.toUpperCase().includes("TRACKING")) {
+        return 4000;
+      }
+      if (step.toUpperCase().includes("SCORING")) {
+        return 2000;
+      }
+      return 3000;
+    };
+
+    const poll = async () => {
+      if (!isMounted) {
+        return;
+      }
+
+      if (!pollStartRef.current) {
+        pollStartRef.current = Date.now();
+      }
+
+      const elapsedMs = Date.now() - pollStartRef.current;
+      if (elapsedMs > 60 * 60 * 1000) {
+        setPolling(false);
+        setPollingTimedOut(true);
+        return;
+      }
+
       try {
         const data = await fetchJsonWithTimeout<JobResponse>(`/api/jobs/${jobId}`);
         const normalizedJob = normalizeJob(data);
         setJob(normalizedJob);
 
-        if (normalizedJob.status === "COMPLETED" || normalizedJob.status === "FAILED") {
-          clearInterval(interval);
+        if (
+          normalizedJob.status === "COMPLETED" ||
+          normalizedJob.status === "PARTIAL" ||
+          normalizedJob.status === "FAILED"
+        ) {
           setPolling(false);
+          return;
         }
+
+        const nextInterval = getPollInterval(normalizedJob.progress?.step ?? null);
+        timeoutId = setTimeout(poll, nextInterval);
       } catch (pollError) {
-        clearInterval(interval);
         setError(toErrorMessage(pollError));
         setPolling(false);
       }
-    }, 2000);
+    };
+
+    poll();
 
     return () => {
-      clearInterval(interval);
+      isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [jobId, polling]);
 
@@ -503,6 +571,8 @@ export default function JobRunner() {
       setPreviewImageErrors({});
       setPreviewError(null);
       previewListRequestRef.current = 0;
+      pollStartRef.current = null;
+      setPollingTimedOut(false);
       return;
     }
   }, [jobId]);
@@ -687,6 +757,8 @@ export default function JobRunner() {
       const response = await enqueueJob(jobId);
       setJob(normalizeJob(response));
       setPolling(true);
+      setPollingTimedOut(false);
+      pollStartRef.current = Date.now();
       setFramesFrozen(true);
       setSelectedPreviewFrame(null);
     } catch (enqueueError) {
@@ -896,6 +968,25 @@ export default function JobRunner() {
     setPolling(false);
   };
 
+  const handleRestartJob = async () => {
+    if (!jobId) {
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    try {
+      const response = await enqueueJob(jobId);
+      setJob(normalizeJob(response));
+      setPolling(true);
+      setPollingTimedOut(false);
+      pollStartRef.current = Date.now();
+    } catch (restartError) {
+      setError(toErrorMessage(restartError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleRefreshJob = async () => {
     if (!jobId) {
       return;
@@ -964,6 +1055,8 @@ export default function JobRunner() {
     setPreviewPollingAttempt(0);
     setPreviewImageErrors({});
     previewListRequestRef.current = 0;
+    pollStartRef.current = null;
+    setPollingTimedOut(false);
   };
 
   const handleSelectTargetFromFrames = () => {
@@ -1124,6 +1217,11 @@ export default function JobRunner() {
               <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
               <span>Frames error: {previewError || "—"}</span>
               <span>Image errors: {previewImageErrorCount}</span>
+              <span>Warnings: {warningMessages.length}</span>
+              <span>Warnings(raw): {JSON.stringify(warningMessages)}</span>
+              <span>Clips: {clipsCount}</span>
+              <span>hasInputVideoUrl: {String(Boolean(inputVideoUrl))}</span>
+              <span>Radar keys: {radarKeysCount}</span>
               <span>playerSaved: {String(playerSaved)}</span>
               <span>targetSaved: {String(targetSaved)}</span>
               <span>
@@ -1330,6 +1428,34 @@ export default function JobRunner() {
             </div>
           ) : null}
 
+          {hasWarnings ? (
+            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-100">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                Warnings
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-amber-100">
+                {warningMessages.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {pollingTimedOut ? (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <p className="font-semibold text-amber-100">
+                This is taking longer than expected.
+              </p>
+              <button
+                type="button"
+                onClick={handleRestartJob}
+                className="mt-3 inline-flex items-center rounded-lg border border-amber-300/40 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:border-amber-200"
+              >
+                Restart job
+              </button>
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
@@ -1406,7 +1532,9 @@ export default function JobRunner() {
           </div>
         ) : null}
 
-        {job && job.status === "COMPLETED" ? <ResultView job={job} /> : null}
+        {job && (job.status === "COMPLETED" || job.status === "PARTIAL") ? (
+          <ResultView job={job} />
+        ) : null}
       </section>
 
       {selectedPreviewFrame ? (
