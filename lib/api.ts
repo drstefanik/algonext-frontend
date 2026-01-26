@@ -545,11 +545,13 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
     throw new Error("Missing frame time from preview frame. Check /frames/list mapping.");
   }
   const requestPayload = {
-    frameTimeSec,
-    x: payload.x,
-    y: payload.y,
-    w: payload.w,
-    h: payload.h
+    frame_time_sec: frameTimeSec,
+    bbox_xywh: {
+      x: payload.x,
+      y: payload.y,
+      w: payload.w,
+      h: payload.h
+    }
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/player-ref`, {
     method: "POST",
