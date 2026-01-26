@@ -13,14 +13,17 @@ import {
   createJob,
   enqueueJob,
   getJob,
+  getJobTrackCandidates,
   listJobFrames,
   normalizeJob,
+  selectJobTrack,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameItem,
   type FrameSelection,
   type JobResponse,
   type PreviewFrame,
+  type TrackCandidate,
   type TargetSelection
 } from "@/lib/api";
 import ProgressBar from "@/components/ProgressBar";
@@ -53,6 +56,11 @@ const formatFrameTime = (timeSec: number | null) =>
 
 const formatFrameAlt = (timeSec: number | null) =>
   timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
+
+const formatMetric = (value: number | null | undefined, suffix = "") =>
+  value === null || value === undefined
+    ? "—"
+    : `${value.toFixed(2)}${suffix}`;
 
 const mapFrameItemToPreviewFrame = (
   frame: FrameItem,
@@ -292,6 +300,9 @@ export default function JobRunner() {
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
+  const [playerCandidateError, setPlayerCandidateError] = useState<string | null>(
+    null
+  );
   const [polling, setPolling] = useState(false);
   const [pollingTimedOut, setPollingTimedOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -307,6 +318,10 @@ export default function JobRunner() {
   );
   const [playerSaved, setPlayerSaved] = useState(false);
   const [targetSaved, setTargetSaved] = useState(false);
+  const [trackCandidates, setTrackCandidates] = useState<TrackCandidate[]>([]);
+  const [loadingTrackCandidates, setLoadingTrackCandidates] = useState(false);
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [selectingTrackId, setSelectingTrackId] = useState<string | null>(null);
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
@@ -357,7 +372,7 @@ export default function JobRunner() {
     resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasPlayer = Boolean(job?.playerRef);
+  const hasPlayer = Boolean(job?.playerRef || selectedTrackId);
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
   const status = job?.status ?? null;
@@ -396,9 +411,8 @@ export default function JobRunner() {
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue =
-    Boolean(job?.playerRef) && Boolean(job?.target?.selections?.length);
-  const enqueueHint = !playerSaved
+  const canEnqueue = hasPlayer && Boolean(job?.target?.selections?.length);
+  const enqueueHint = !hasPlayer
     ? "Missing Player selection"
     : !targetSaved
       ? "Missing Target selection"
@@ -408,6 +422,11 @@ export default function JobRunner() {
     (isExtractingPreviews || isPreviewsReady || selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
   const frameSelectorKey = jobId ?? "frame-selector";
+  const showManualPlayerFallback =
+    showPlayerSection &&
+    !loadingTrackCandidates &&
+    trackCandidates.length === 0 &&
+    !selectedTrackId;
 
   const activePreviewRect = previewDragState
     ? {
@@ -424,6 +443,14 @@ export default function JobRunner() {
       return "";
     }
     return `/api/frame-proxy?url=${encodeURIComponent(signedUrl)}`;
+  };
+
+  const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
+    const thumbnailUrl = candidate.thumbnailUrl ?? "";
+    if (!thumbnailUrl) {
+      return "";
+    }
+    return `/api/frame-proxy?url=${encodeURIComponent(thumbnailUrl)}`;
   };
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
@@ -551,9 +578,9 @@ export default function JobRunner() {
   }, [jobTargetSelection]);
 
   useEffect(() => {
-    setPlayerSaved(Boolean(job?.playerRef));
+    setPlayerSaved(Boolean(job?.playerRef || selectedTrackId));
     setTargetSaved(Boolean(job?.target?.selections?.length));
-  }, [job?.playerRef, job?.target?.selections?.length]);
+  }, [job?.playerRef, job?.target?.selections?.length, selectedTrackId]);
 
   useEffect(() => {
     if (!shouldPollFrameList) {
@@ -570,6 +597,11 @@ export default function JobRunner() {
       setPreviewPollingAttempt(0);
       setPreviewImageErrors({});
       setPreviewError(null);
+      setTrackCandidates([]);
+      setLoadingTrackCandidates(false);
+      setPlayerCandidateError(null);
+      setSelectedTrackId(null);
+      setSelectingTrackId(null);
       previewListRequestRef.current = 0;
       pollStartRef.current = null;
       setPollingTimedOut(false);
@@ -582,6 +614,49 @@ export default function JobRunner() {
       setFramesFrozen(false);
     }
   }, [jobId]);
+
+  useEffect(() => {
+    if (showTargetSection) {
+      setGridMode("target");
+    } else if (showManualPlayerFallback) {
+      setGridMode("player-ref");
+    }
+  }, [showTargetSection, showManualPlayerFallback]);
+
+  useEffect(() => {
+    if (!jobId || !showPlayerSection) {
+      return;
+    }
+
+    let isMounted = true;
+    setLoadingTrackCandidates(true);
+    setPlayerCandidateError(null);
+
+    getJobTrackCandidates(jobId)
+      .then((candidates) => {
+        if (!isMounted) {
+          return;
+        }
+        setTrackCandidates(candidates);
+      })
+      .catch((fetchError) => {
+        if (!isMounted) {
+          return;
+        }
+        setTrackCandidates([]);
+        setPlayerCandidateError(toErrorMessage(fetchError));
+      })
+      .finally(() => {
+        if (!isMounted) {
+          return;
+        }
+        setLoadingTrackCandidates(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [jobId, showPlayerSection]);
 
   useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
@@ -733,8 +808,12 @@ export default function JobRunner() {
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
+      setPlayerCandidateError(null);
       setPlayerSaved(false);
       setTargetSaved(false);
+      setTrackCandidates([]);
+      setSelectedTrackId(null);
+      setSelectingTrackId(null);
       setGridMode("player-ref");
     } catch (createError) {
       setError(toErrorMessage(createError));
@@ -748,7 +827,7 @@ export default function JobRunner() {
       return;
     }
     if (!canEnqueue) {
-      setError("Prima salva Player Box e Target Box.");
+      setError("Seleziona un player e salva il target.");
       return;
     }
     setError(null);
@@ -765,6 +844,41 @@ export default function JobRunner() {
       setError(toErrorMessage(enqueueError));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleRefreshTrackCandidates = async () => {
+    if (!jobId) {
+      return;
+    }
+    setLoadingTrackCandidates(true);
+    setPlayerCandidateError(null);
+    try {
+      const candidates = await getJobTrackCandidates(jobId);
+      setTrackCandidates(candidates);
+    } catch (fetchError) {
+      setTrackCandidates([]);
+      setPlayerCandidateError(toErrorMessage(fetchError));
+    } finally {
+      setLoadingTrackCandidates(false);
+    }
+  };
+
+  const handleSelectTrack = async (trackId: string) => {
+    if (!jobId) {
+      return;
+    }
+    setPlayerCandidateError(null);
+    setSelectingTrackId(trackId);
+    try {
+      await selectJobTrack(jobId, trackId);
+      setSelectedTrackId(trackId);
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+    } catch (selectError) {
+      setPlayerCandidateError(toErrorMessage(selectError));
+    } finally {
+      setSelectingTrackId(null);
     }
   };
 
@@ -791,7 +905,7 @@ export default function JobRunner() {
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
     if (mode === "target" && !hasPlayer) {
-      setError("Save Player Box first.");
+      setError("Select player first.");
       return;
     }
     if (!hasFullPreviewSet) {
@@ -1039,6 +1153,7 @@ export default function JobRunner() {
     setSelectionError(null);
     setSelectionSuccess(null);
     setPlayerRefError(null);
+    setPlayerCandidateError(null);
     setPolling(false);
     setSavingSelection(false);
     setSavingPlayerRef(false);
@@ -1046,6 +1161,10 @@ export default function JobRunner() {
     setPlayerRefSelection(null);
     setPlayerSaved(false);
     setTargetSaved(false);
+    setTrackCandidates([]);
+    setLoadingTrackCandidates(false);
+    setSelectedTrackId(null);
+    setSelectingTrackId(null);
     setGridMode("player-ref");
     setPreviewDragState(null);
     setPreviewFrames([]);
@@ -1169,13 +1288,13 @@ export default function JobRunner() {
             <button
               type="button"
               onClick={handleEnqueue}
-              disabled={submitting}
+              disabled={!canEnqueue || submitting}
               aria-disabled={!canEnqueue || submitting}
               className={`mt-3 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 ${
                 !canEnqueue || submitting ? "cursor-not-allowed opacity-50" : ""
               }`}
             >
-              {submitting ? "Enqueueing..." : "Enqueue"}
+              {submitting ? "Enqueueing..." : "Enqueue analysis"}
             </button>
             <p className="mt-2 text-xs text-slate-500">{enqueueHint}</p>
           </div>
@@ -1204,7 +1323,7 @@ export default function JobRunner() {
           </span>
         </div>
 
-        <div className="mt-6 space-y-4">
+        <div className="mt-6 space-y-6">
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
             <p className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
               Preview debug
@@ -1240,6 +1359,137 @@ export default function JobRunner() {
               </span>
             </div>
           </div>
+          {jobId ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Candidate selection
+                  </p>
+                  <p className="mt-2 text-sm text-slate-200">
+                    Choose the player track to follow.
+                  </p>
+                </div>
+                {showPlayerSection ? (
+                  <button
+                    type="button"
+                    onClick={handleRefreshTrackCandidates}
+                    disabled={loadingTrackCandidates}
+                    className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
+                  </button>
+                ) : null}
+              </div>
+
+              {showPlayerSection ? (
+                <div className="mt-4 space-y-4">
+                  {loadingTrackCandidates ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                      <span>Fetching candidates...</span>
+                    </div>
+                  ) : null}
+                  {playerCandidateError ? (
+                    <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                      {playerCandidateError}
+                    </div>
+                  ) : null}
+                  {trackCandidates.length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {trackCandidates.map((candidate) => {
+                        const thumbnailSrc = getCandidateThumbnailSrc(candidate);
+                        const isSelected = selectedTrackId === candidate.trackId;
+                        const isSelecting = selectingTrackId === candidate.trackId;
+                        return (
+                          <div
+                            key={candidate.trackId}
+                            className={`overflow-hidden rounded-xl border ${
+                              isSelected
+                                ? "border-emerald-400/60 bg-emerald-500/10"
+                                : "border-slate-800 bg-slate-950"
+                            }`}
+                          >
+                            <div className="h-32 w-full overflow-hidden bg-slate-900">
+                              {thumbnailSrc ? (
+                                <img
+                                  src={thumbnailSrc}
+                                  alt={`Candidate ${candidate.trackId}`}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                  No thumbnail
+                                </div>
+                              )}
+                            </div>
+                            <div className="space-y-3 p-3 text-sm text-slate-200">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                  Track {candidate.trackId}
+                                </span>
+                                {isSelected ? (
+                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                    Selected
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="grid grid-cols-3 gap-2 text-xs text-slate-400">
+                                <div>
+                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                    Coverage
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-200">
+                                    {formatMetric(candidate.coverage)}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                    Stability
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-200">
+                                    {formatMetric(candidate.stability)}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                    Avg area
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-200">
+                                    {formatMetric(candidate.avgBoxArea)}
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleSelectTrack(candidate.trackId)}
+                                disabled={isSelecting || isSelected}
+                                className={`w-full rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition ${
+                                  isSelected
+                                    ? "cursor-default bg-emerald-400/20 text-emerald-200"
+                                    : "bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                }`}
+                              >
+                                {isSelecting ? "Selecting..." : isSelected ? "Selected" : "Select"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      No candidates available yet. Use the manual fallback below.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-400">
+                  Player selected. Continue with target selection.
+                </p>
+              )}
+            </div>
+          ) : null}
           {hasPreviewFrameErrors ? (
             <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
               Images blocked or failed to load. Check the frame proxy or mixed
@@ -1247,38 +1497,14 @@ export default function JobRunner() {
             </div>
           ) : null}
           {jobId ? (
-            previewsReady ? (
+            previewsReady && (showTargetSection || showManualPlayerFallback) ? (
               <FrameSelector key={frameSelectorKey}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-sm text-slate-400">
                     {gridMode === "player-ref"
-                      ? "Click a preview frame to draw a bounding box around the player."
+                      ? "Manual fallback: click a frame to draw a bounding box around the player."
                       : "Click a preview frame to draw a bounding box around the target."}
                   </p>
-                  <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setGridMode("player-ref")}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition ${
-                        gridMode === "player-ref"
-                          ? "bg-emerald-400 text-slate-950"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      Player
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setGridMode("target")}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] transition ${
-                        gridMode === "target"
-                          ? "bg-amber-300 text-slate-950"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      Target
-                    </button>
-                  </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {resolvedPreviewFrames.map((frame, index) => (

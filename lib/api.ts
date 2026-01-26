@@ -140,6 +140,14 @@ export type JobTarget = {
   [key: string]: any;
 };
 
+export type TrackCandidate = {
+  trackId: string;
+  coverage?: number | null;
+  stability?: number | null;
+  avgBoxArea?: number | null;
+  thumbnailUrl?: string | null;
+};
+
 type UnknownRecord = Record<string, any>;
 
 const jsonHeaders = {
@@ -274,6 +282,61 @@ const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
     w: selection.w ?? 0,
     h: selection.h ?? 0
   };
+};
+
+const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
+  const trackId =
+    String(
+      candidate.trackId ??
+        candidate.track_id ??
+        candidate.id ??
+        candidate.track ??
+        ""
+    ) || "unknown";
+  const coverage = coerceNumber(candidate.coverage ?? candidate.coverage_pct);
+  const stability = coerceNumber(candidate.stability ?? candidate.stability_score);
+  const avgBoxArea = coerceNumber(
+    candidate.avgBoxArea ??
+      candidate.avg_box_area ??
+      candidate.avg_box ??
+      candidate.avg_box_area_pct
+  );
+  const thumbnailUrl =
+    candidate.thumbnailUrl ??
+    candidate.thumbnail_url ??
+    candidate.sampleUrl ??
+    candidate.sample_url ??
+    candidate.frameUrl ??
+    candidate.frame_url ??
+    candidate.imageUrl ??
+    candidate.image_url ??
+    null;
+
+  return {
+    trackId,
+    coverage,
+    stability,
+    avgBoxArea,
+    thumbnailUrl
+  };
+};
+
+const normalizeTrackCandidates = (payload: unknown): TrackCandidate[] => {
+  if (!payload) {
+    return [];
+  }
+  const source = Array.isArray(payload)
+    ? payload
+    : (payload as UnknownRecord).items ??
+      (payload as UnknownRecord).candidates ??
+      (payload as UnknownRecord).tracks ??
+      [];
+
+  if (!Array.isArray(source)) {
+    return [];
+  }
+
+  return source.map(mapTrackCandidate).filter((candidate) => Boolean(candidate.trackId));
 };
 
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
@@ -610,4 +673,36 @@ export async function saveJobTargetSelection(
     await response.json().catch(() => null)
   );
   return responsePayload;
+}
+
+export async function getJobTrackCandidates(jobId: string) {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/candidates`, {
+    method: "GET",
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
+    await response.json().catch(() => null)
+  );
+  return normalizeTrackCandidates(payload);
+}
+
+export async function selectJobTrack(jobId: string, trackId: string) {
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/select-track`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify({ track_id: trackId, trackId })
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  const payload = unwrap<UnknownRecord | null>(await response.json().catch(() => null));
+  return payload;
 }
