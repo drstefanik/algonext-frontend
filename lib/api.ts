@@ -80,6 +80,7 @@ export type JobResult = {
     inputVideo?: JobAssetVideo;
     inputVideoUrl?: string;
     input_video_url?: string;
+    input_video?: JobAssetVideo;
     clips?: JobClip[];
   };
   clips?: JobClip[];
