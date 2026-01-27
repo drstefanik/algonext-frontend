@@ -313,7 +313,7 @@ export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
   const [category, setCategory] = useState("U17");
-  const [shirtNumber, setShirtNumber] = useState<number>(9);
+  const [shirtNumber, setShirtNumber] = useState("");
   const [teamName, setTeamName] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
@@ -782,7 +782,7 @@ export default function JobRunner() {
         setShowAllCandidates(false);
         setPlayerCandidateError(null);
 
-        if (candidates.length > 0 || autodetectLowCoverage) {
+        if (candidates.length > 0) {
           setCandidatePolling(false);
           return;
         }
@@ -805,7 +805,7 @@ export default function JobRunner() {
       }
       setCandidatePolling(false);
     };
-  }, [jobId, selectedTrackId, autodetectLowCoverage]);
+  }, [jobId, selectedTrackId]);
 
   useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
@@ -932,10 +932,8 @@ export default function JobRunner() {
       setError("Video URL or key is required.");
       return;
     }
-    if (!teamName.trim()) {
-      setError("Team name is required.");
-      return;
-    }
+    const trimmedTeamName = teamName.trim();
+    const normalizedShirtNumber = shirtNumber !== "" ? Number(shirtNumber) : null;
 
     setSubmitting(true);
     try {
@@ -946,8 +944,10 @@ export default function JobRunner() {
           : { video_key: trimmedVideo, video_bucket: "fnh" }),
         role,
         category,
-        shirt_number: Number(shirtNumber),
-        team_name: teamName.trim()
+        ...(trimmedTeamName ? { team_name: trimmedTeamName } : {}),
+        ...(normalizedShirtNumber !== null && !Number.isNaN(normalizedShirtNumber)
+          ? { shirt_number: normalizedShirtNumber }
+          : {})
       });
       const nextJobId = response.jobId ?? null;
       setJobId(nextJobId);
@@ -1402,22 +1402,23 @@ export default function JobRunner() {
           </label>
 
           <label className="block text-sm text-slate-300">
-            Team name
+            Team name <span className="text-xs text-slate-500">(optional)</span>
             <input
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
               className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-              required
+              placeholder="e.g. Home team"
             />
           </label>
 
           <label className="block text-sm text-slate-300">
-            Shirt Number
+            Shirt number <span className="text-xs text-slate-500">(optional)</span>
             <input
               type="number"
               value={shirtNumber}
-              onChange={(event) => setShirtNumber(Number(event.target.value))}
+              onChange={(event) => setShirtNumber(event.target.value)}
               className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              placeholder="e.g. 9"
             />
           </label>
         </div>
@@ -1545,6 +1546,11 @@ export default function JobRunner() {
 
               {showPlayerSection ? (
                 <div className="mt-4 space-y-4">
+                  {autodetectLowCoverage ? (
+                    <div className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                      Low coverage – pick the best match
+                    </div>
+                  ) : null}
                   {isDetectingPlayers ? (
                     <div className="flex items-center gap-2 text-sm text-slate-400">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
