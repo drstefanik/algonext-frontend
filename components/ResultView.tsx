@@ -11,8 +11,12 @@ const formatScore = (value?: number) => {
 export default function ResultView({ job }: { job: JobResponse }) {
   const result = job.result ?? null;
   const summary = result?.summary ?? null;
+  const summaryRecord = summary as Record<string, unknown> | null;
   const overallScore = result?.overallScore ?? summary?.overallScore ?? null;
-  const roleScore = result?.roleScore ?? summary?.roleScore ?? null;
+  const roleScore =
+    result?.roleScore ??
+    (summaryRecord?.roleScore as number | null | undefined) ??
+    null;
   const playerRole = result?.playerRole ?? summary?.playerRole ?? null;
   const radarEntries = Object.entries(result?.radar ?? {});
   const expectedRadarKeys = Array.isArray(result?.radarExpected)
