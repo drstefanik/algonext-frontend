@@ -13,8 +13,8 @@ type CreateJobVideoPayload =
 export type CreateJobPayload = CreateJobVideoPayload & {
   role: string;
   category: string;
-  shirt_number: number;
-  team_name: string;
+  shirt_number?: number;
+  team_name?: string;
 };
 
 export type JobStatus =
