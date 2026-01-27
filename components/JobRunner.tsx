@@ -24,6 +24,7 @@ import {
   type JobResponse,
   type PreviewFrame,
   type TrackCandidate,
+  type TrackCandidateSampleFrame,
   type TargetSelection
 } from "@/lib/api";
 import ProgressBar from "@/components/ProgressBar";
@@ -133,6 +134,34 @@ const getCandidateSelection = (candidate: TrackCandidate) => {
     return null;
   }
   return { frameTimeSec, x, y, w, h };
+};
+
+const resolveCandidateBox = (
+  frame: TrackCandidateSampleFrame | null,
+  candidate: TrackCandidate
+) => {
+  const x = frame?.x ?? candidate.x ?? null;
+  const y = frame?.y ?? candidate.y ?? null;
+  const w = frame?.w ?? candidate.w ?? null;
+  const h = frame?.h ?? candidate.h ?? null;
+  if (
+    x === null ||
+    x === undefined ||
+    y === null ||
+    y === undefined ||
+    w === null ||
+    w === undefined ||
+    h === null ||
+    h === undefined
+  ) {
+    return null;
+  }
+  return {
+    x: clamp(x),
+    y: clamp(y),
+    w: clamp(w),
+    h: clamp(h)
+  };
 };
 
 const buildHttpErrorMessage = async (response: Response) => {
@@ -358,6 +387,7 @@ export default function JobRunner() {
   const [error, setError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
+  const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
   const [playerCandidateError, setPlayerCandidateError] = useState<string | null>(
     null
@@ -386,6 +416,9 @@ export default function JobRunner() {
   const [showSecondaryCandidates, setShowSecondaryCandidates] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [candidateReview, setCandidateReview] = useState<TrackCandidate | null>(
+    null
+  );
   const [selectingTrackId, setSelectingTrackId] = useState<string | null>(null);
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
@@ -448,7 +481,7 @@ export default function JobRunner() {
     hasAnyPreviewFrames && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
-  const hasPlayer = Boolean(job?.playerRef || selectedTrackId);
+  const hasPlayerRef = Boolean(job?.playerRef);
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
   const targetConfirmed = Boolean(
@@ -459,6 +492,16 @@ export default function JobRunner() {
   );
   const status = job?.status ?? null;
   const normalizedStatus = typeof status === "string" ? status.toUpperCase() : null;
+  const isFinalStatus =
+    normalizedStatus === "COMPLETED" ||
+    normalizedStatus === "PARTIAL" ||
+    normalizedStatus === "FAILED";
+  const isFinalStep =
+    normalizedStep === "COMPLETE" ||
+    normalizedStep === "COMPLETED" ||
+    normalizedStep === "FINISHED";
+  const shouldShowResult = Boolean(job) && (isFinalStatus || isFinalStep);
+  const resultMissing = shouldShowResult && !job?.result;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
   const isCandidatesFailed = normalizedStep === "CANDIDATES_FAILED";
@@ -486,14 +529,14 @@ export default function JobRunner() {
   const radarKeysCount = Object.keys(job?.result?.radar ?? {}).length;
   const previewsReady = hasFullPreviewSet;
   const isTargetStepReady =
-    normalizedStep === "WAITING_FOR_TARGET" || hasTarget || playerSaved;
+    normalizedStep === "WAITING_FOR_TARGET" || hasTarget || targetConfirmed;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
     ? "IDLE"
     : status === "RUNNING" || status === "QUEUED" || status === "PROCESSING"
       ? "PROCESSING"
-      : previewsReady && !hasPlayer
+      : previewsReady && !hasPlayerRef
         ? "PLAYER"
-        : previewsReady && hasPlayer && !hasTarget
+        : previewsReady && hasPlayerRef && !hasTarget
           ? "TARGET"
           : "PROCESSING";
   const rawAutodetectionStatus =
@@ -554,7 +597,7 @@ export default function JobRunner() {
       : "Select player now";
   const canShowPlayerCandidates =
     Boolean(jobId) &&
-    !hasPlayer &&
+    !hasPlayerRef &&
     (previewsReady ||
       (isCandidatesFailed && hasAnyPreviewFrames) ||
       trackCandidates.length > 0 ||
@@ -567,12 +610,10 @@ export default function JobRunner() {
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue = hasPlayer && targetConfirmed;
-  const enqueueHint = !hasPlayer
-    ? "Select a player to start analysis"
-    : !targetConfirmed
-      ? "Confirm the target to start analysis"
-      : "Ready";
+  const canEnqueue = hasPlayerRef && (targetConfirmed || hasTarget);
+  const enqueueHint = !canEnqueue
+    ? "Seleziona player e target prima di avviare"
+    : "Ready";
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || selectionReady);
@@ -621,6 +662,23 @@ export default function JobRunner() {
     );
   }, [trackCandidates]);
 
+  const reviewFrames =
+    candidateReview?.sampleFrames?.filter((frame) => frame.imageUrl) ?? [];
+  const reviewPreviewFrames: TrackCandidateSampleFrame[] =
+    reviewFrames.length > 0
+      ? reviewFrames.slice(0, 3)
+      : candidateReview?.thumbnailUrl
+        ? [
+            {
+              imageUrl: candidateReview.thumbnailUrl,
+              x: candidateReview.x ?? null,
+              y: candidateReview.y ?? null,
+              w: candidateReview.w ?? null,
+              h: candidateReview.h ?? null
+            }
+          ]
+        : [];
+
   const showBestMatchMessage =
     totalTracksCount > 0 && trackCandidates.length === 0 && !loadingTrackCandidates;
   const hasCandidateList =
@@ -659,28 +717,40 @@ export default function JobRunner() {
     return Math.abs(selectionTime - frameTime) < 0.05;
   };
 
-  const resolveTargetPreviewFrame = (selection: TargetSelection | null) => {
+  const resolveTargetPreviewFrame = (
+    selection: TargetSelection | null
+  ): { frame: PreviewFrame | null; warning?: string } => {
     if (!selection) {
-      return null;
+      return { frame: null };
     }
     const selectionKey = getFrameKey(selection);
     if (selectionKey) {
-      return (
+      const frame =
         previewFramesWithImages.find(
-          (frame) => getFrameKey(frame) === selectionKey
-        ) ?? null
-      );
+          (candidate) => getFrameKey(candidate) === selectionKey
+        ) ?? null;
+      return {
+        frame,
+        warning: frame
+          ? undefined
+          : `Frame_key ${selectionKey} non trovato nei preview.`
+      };
     }
     const targetTime = getTimeSec(selection);
     if (targetTime == null) {
-      return null;
+      return { frame: null, warning: "Frame time_sec mancante nel target." };
     }
-    return (
-      previewFramesWithImages.find((frame) => {
-        const frameTime = getTimeSec(frame);
+    const frame =
+      previewFramesWithImages.find((candidate) => {
+        const frameTime = getTimeSec(candidate);
         return frameTime != null && Math.abs(frameTime - targetTime) < 0.05;
-      }) ?? null
-    );
+      }) ?? null;
+    return {
+      frame,
+      warning: frame
+        ? "Frame risolto via time_sec (±0.05s). Verifica l'allineamento."
+        : "Frame target non trovato con tolleranza ±0.05s."
+    };
   };
 
   const getSelectionDisplayRect = (
@@ -688,6 +758,16 @@ export default function JobRunner() {
   ) => {
     if (!selection || !previewImageSize) {
       return null;
+    }
+    if (
+      selection.x < 0 ||
+      selection.y < 0 ||
+      selection.w < 0 ||
+      selection.h < 0 ||
+      selection.x + selection.w > 1 ||
+      selection.y + selection.h > 1
+    ) {
+      console.warn("SELECTION_OUT_OF_BOUNDS", selection);
     }
     return {
       left: selection.x * previewImageSize.width,
@@ -711,6 +791,13 @@ export default function JobRunner() {
       return "";
     }
     return `/api/frame-proxy?url=${encodeURIComponent(thumbnailUrl)}`;
+  };
+
+  const getCandidateSampleFrameSrc = (frameUrl: string | null | undefined) => {
+    if (!frameUrl) {
+      return "";
+    }
+    return `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
   };
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
@@ -848,18 +935,19 @@ export default function JobRunner() {
   }, [jobTargetSelection]);
 
   useEffect(() => {
-    setPlayerSaved(Boolean(job?.playerRef || selectedTrackId));
-    if (job?.target?.selections?.length) {
+    if (selectedTrackId) {
+      setCandidateReview(null);
+    }
+  }, [selectedTrackId]);
+
+  useEffect(() => {
+    setPlayerSaved(hasPlayerRef);
+    if (targetConfirmed || hasTarget) {
       setTargetSaved(true);
     } else if (!draftTargetSelection) {
       setTargetSaved(false);
     }
-  }, [
-    job?.playerRef,
-    job?.target?.selections?.length,
-    selectedTrackId,
-    draftTargetSelection
-  ]);
+  }, [hasPlayerRef, targetConfirmed, hasTarget, draftTargetSelection]);
 
   useEffect(() => {
     if (!selectedPreviewFrame) {
@@ -1135,6 +1223,7 @@ export default function JobRunner() {
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
       setSelectionSuccess(null);
+      setSelectionWarning(null);
       setSelectedPreviewFrame(null);
       setPlayerRefSelection(null);
       setPlayerRefError(null);
@@ -1146,6 +1235,7 @@ export default function JobRunner() {
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
       setSelectedTrackId(null);
+      setCandidateReview(null);
       setSelectingTrackId(null);
       setGridMode("player-ref");
     } catch (createError) {
@@ -1160,11 +1250,7 @@ export default function JobRunner() {
       return;
     }
     if (!canEnqueue) {
-      setError(
-        !hasPlayer
-          ? "Seleziona un player per avviare l'analisi."
-          : "Conferma il target prima di avviare l'analisi."
-      );
+      setError("Seleziona player e target prima di avviare");
       return;
     }
     setError(null);
@@ -1221,14 +1307,33 @@ export default function JobRunner() {
     setSelectingTrackId(candidate.trackId);
     try {
       await selectJobTrack(jobId, candidate);
-      setSelectedTrackId(candidate.trackId);
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
+      if (!updatedJob.playerRef) {
+        setPlayerCandidateError(
+          "Backend did not persist player_ref yet. Please retry or refresh."
+        );
+      } else {
+        setSelectedTrackId(candidate.trackId);
+        setCandidateReview(null);
+      }
     } catch (selectError) {
       setPlayerCandidateError(toErrorMessage(selectError));
     } finally {
       setSelectingTrackId(null);
     }
+  };
+
+  const handleReviewCandidate = (candidate: TrackCandidate) => {
+    const selection = getCandidateSelection(candidate);
+    if (!selection) {
+      setPlayerCandidateError(
+        "Missing selection data for this candidate. Check sample frames mapping."
+      );
+      return;
+    }
+    setPlayerCandidateError(null);
+    setCandidateReview(candidate);
   };
 
   const handleSaveSelection = async () => {
@@ -1237,6 +1342,7 @@ export default function JobRunner() {
     }
     setSelectionError(null);
     setSelectionSuccess(null);
+    setSelectionWarning(null);
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
@@ -1244,9 +1350,19 @@ export default function JobRunner() {
       });
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
-      setTargetSelection(draftTargetSelection);
-      setTargetSaved(true);
-      setSelectionSuccess("Selection saved");
+      const updatedSelection = updatedJob.target?.selections?.[0] ?? null;
+      const updatedTargetConfirmed = Boolean(updatedJob.target?.confirmed);
+      const updatedTargetSaved = updatedTargetConfirmed || Boolean(updatedSelection);
+      setTargetSelection(updatedSelection);
+      setDraftTargetSelection(updatedSelection);
+      setTargetSaved(updatedTargetSaved);
+      if (updatedTargetSaved) {
+        setSelectionSuccess("Selection saved");
+      } else {
+        setSelectionError(
+          "Selection not confirmed in backend. Please retry or check API logs."
+        );
+      }
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
     } finally {
@@ -1255,7 +1371,7 @@ export default function JobRunner() {
   };
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
-    if (mode === "target" && !hasPlayer) {
+    if (mode === "target" && !hasPlayerRef) {
       setError("Select player first.");
       return;
     }
@@ -1272,6 +1388,7 @@ export default function JobRunner() {
     if (mode === "target") {
       setSelectionError(null);
       setSelectionSuccess(null);
+      setSelectionWarning(null);
       const existingSelection = draftTargetSelection ?? targetSelection;
       if (existingSelection && selectionMatchesFrame(existingSelection, frame)) {
         setDraftTargetSelection(existingSelection);
@@ -1358,6 +1475,31 @@ export default function JobRunner() {
         w: clamp(x2 - x1),
         h: clamp(y2 - y1)
       };
+      const outOfBounds =
+        left < 0 ||
+        top < 0 ||
+        left + width > displayWidth ||
+        top + height > displayHeight;
+      if (outOfBounds) {
+        console.warn("DRAW_BOX_OUT_OF_BOUNDS", {
+          left,
+          top,
+          width,
+          height,
+          displayWidth,
+          displayHeight
+        });
+      }
+      console.assert(
+        normalized.x >= 0 &&
+          normalized.y >= 0 &&
+          normalized.w >= 0 &&
+          normalized.h >= 0 &&
+          normalized.x + normalized.w <= 1 &&
+          normalized.y + normalized.h <= 1,
+        "Normalized bbox outside frame",
+        normalized
+      );
       if (previewMode === "player-ref") {
         setPlayerRefSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
@@ -1466,11 +1608,7 @@ export default function JobRunner() {
       return;
     }
     if (!canEnqueue) {
-      setError(
-        !hasPlayer
-          ? "Seleziona un player per riavviare l'analisi."
-          : "Conferma il target prima di riavviare l'analisi."
-      );
+      setError("Seleziona player e target prima di avviare");
       return;
     }
     setError(null);
@@ -1545,6 +1683,7 @@ export default function JobRunner() {
     setError(null);
     setSelectionError(null);
     setSelectionSuccess(null);
+    setSelectionWarning(null);
     setPlayerRefError(null);
     setPlayerCandidateError(null);
     setPolling(false);
@@ -1561,6 +1700,7 @@ export default function JobRunner() {
     setShowSecondaryCandidates(false);
     setShowAllCandidates(false);
     setSelectedTrackId(null);
+    setCandidateReview(null);
     setSelectingTrackId(null);
     setGridMode("player-ref");
     setPreviewDragState(null);
@@ -1624,14 +1764,20 @@ export default function JobRunner() {
       });
     }
     setSelectionError(null);
-    const resolvedTargetFrame = resolveTargetPreviewFrame(
-      draftTargetSelection ?? targetSelection
-    );
-    if (draftTargetSelection ?? targetSelection) {
+    setSelectionWarning(null);
+    const selectionSource = draftTargetSelection ?? targetSelection;
+    const { frame: resolvedTargetFrame, warning } =
+      resolveTargetPreviewFrame(selectionSource);
+    if (selectionSource) {
+      if (warning && resolvedTargetFrame) {
+        setSelectionWarning(warning);
+      }
       if (resolvedTargetFrame) {
         handleOpenPreview(resolvedTargetFrame, "target");
       } else {
-        setSelectionError("Impossibile risolvere il frame del target.");
+        setSelectionError(
+          warning ?? "Impossibile risolvere il frame del target."
+        );
       }
     }
     setGridMode("target");
@@ -1938,7 +2084,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate)}
+                                      onClick={() => handleReviewCandidate(candidate)}
                                       disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -2021,7 +2167,7 @@ export default function JobRunner() {
                                             : isSelected
                                               ? "Selected"
                                               : hasSelectionData
-                                                ? "Click to select"
+                                                ? "Review selection"
                                                 : "Missing selection data"}
                                         </div>
                                       </div>
@@ -2059,7 +2205,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate)}
+                                      onClick={() => handleReviewCandidate(candidate)}
                                       disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -2142,7 +2288,7 @@ export default function JobRunner() {
                                             : isSelected
                                               ? "Selected"
                                               : hasSelectionData
-                                                ? "Click to select"
+                                                ? "Review selection"
                                                 : "Missing selection data"}
                                         </div>
                                       </div>
@@ -2180,7 +2326,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate)}
+                                      onClick={() => handleReviewCandidate(candidate)}
                                       disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -2263,7 +2409,7 @@ export default function JobRunner() {
                                             : isSelected
                                               ? "Selected"
                                               : hasSelectionData
-                                                ? "Click to select"
+                                                ? "Review selection"
                                                 : "Missing selection data"}
                                         </div>
                                       </div>
@@ -2301,7 +2447,7 @@ export default function JobRunner() {
                                 <button
                                   key={candidate.trackId}
                                   type="button"
-                                  onClick={() => handleSelectTrack(candidate)}
+                                  onClick={() => handleReviewCandidate(candidate)}
                                   disabled={isSelecting || isSelected || !hasSelectionData}
                                   aria-pressed={isSelected}
                                   className={`overflow-hidden rounded-xl border text-left transition ${
@@ -2384,13 +2530,103 @@ export default function JobRunner() {
                                         : isSelected
                                           ? "Selected"
                                           : hasSelectionData
-                                            ? "Click to select"
+                                            ? "Review selection"
                                             : "Missing selection data"}
                                     </div>
                                   </div>
                                 </button>
                               );
                             })}
+                          </div>
+                        </div>
+                      ) : null}
+                      {candidateReview ? (
+                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                Review selection
+                              </p>
+                              <p className="mt-1 text-sm text-slate-200">
+                                Track {candidateReview.trackId}: verifica i sample
+                                frame prima di confermare.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setCandidateReview(null)}
+                              className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                            >
+                              Close
+                            </button>
+                          </div>
+                          {reviewPreviewFrames.length > 0 ? (
+                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                              {reviewPreviewFrames.map((frame, index) => {
+                                const frameSrc = getCandidateSampleFrameSrc(
+                                  frame.imageUrl ?? null
+                                );
+                                const bbox = resolveCandidateBox(
+                                  frame ?? null,
+                                  candidateReview
+                                );
+                                return (
+                                  <div
+                                    key={`${candidateReview.trackId}-${index}`}
+                                    className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-900"
+                                  >
+                                    {frameSrc ? (
+                                      <img
+                                        src={frameSrc}
+                                        alt={`Sample frame ${index + 1}`}
+                                        className="h-28 w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-28 items-center justify-center text-xs text-slate-500">
+                                        No frame
+                                      </div>
+                                    )}
+                                    {bbox ? (
+                                      <div
+                                        className="absolute rounded border border-emerald-400 bg-emerald-400/20"
+                                        style={{
+                                          left: `${bbox.x * 100}%`,
+                                          top: `${bbox.y * 100}%`,
+                                          width: `${bbox.w * 100}%`,
+                                          height: `${bbox.h * 100}%`
+                                        }}
+                                      />
+                                    ) : null}
+                                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/40 to-transparent px-2 py-1">
+                                      <p className="text-[0.6rem] uppercase tracking-[0.2em] text-slate-200">
+                                        t={formatFrameTime(
+                                          frame.frameTimeSec ?? null
+                                        )}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="mt-3 text-xs text-slate-500">
+                              Sample frames non disponibili per questa traccia.
+                            </p>
+                          )}
+                          <div className="mt-4 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectTrack(candidateReview)}
+                              disabled={selectingTrackId === candidateReview.trackId}
+                              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {selectingTrackId === candidateReview.trackId
+                                ? "Selecting..."
+                                : "Track this player"}
+                            </button>
+                            <span className="text-xs text-slate-500">
+                              Conferma dopo aver controllato i bounding box.
+                            </span>
                           </div>
                         </div>
                       ) : null}
@@ -2722,6 +2958,11 @@ export default function JobRunner() {
                 {selectionError}
               </div>
             ) : null}
+            {selectionWarning ? (
+              <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+                {selectionWarning}
+              </div>
+            ) : null}
             {selectionSuccess ? (
               <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
                 {selectionSuccess}
@@ -2730,9 +2971,12 @@ export default function JobRunner() {
           </div>
         ) : null}
 
-        {job && (job.status === "COMPLETED" || job.status === "PARTIAL") ? (
-          <ResultView job={job} />
+        {resultMissing ? (
+          <div className="mt-6 rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+            Processing completato ma result mancante (backend).
+          </div>
         ) : null}
+        {shouldShowResult && job?.result ? <ResultView job={job} /> : null}
       </section>
 
       {selectedPreviewFrame ? (

@@ -9,45 +9,49 @@ const formatScore = (value?: number) => {
 };
 
 export default function ResultView({ job }: { job: JobResponse }) {
-  const summary = job.result?.summary;
-  const radarEntries = Object.entries(job.result?.radar ?? {});
-  const expectedRadarKeys = Array.isArray(job.result?.radarExpected)
-    ? job.result?.radarExpected
-    : Array.isArray(job.result?.radar_expected)
-      ? job.result?.radar_expected
-      : Array.isArray(job.result?.radarKeys)
-        ? job.result?.radarKeys
-        : Array.isArray(job.result?.radar_keys)
-          ? job.result?.radar_keys
+  const result = job.result ?? null;
+  const summary = result?.summary ?? null;
+  const overallScore = result?.overallScore ?? summary?.overallScore ?? null;
+  const roleScore = result?.roleScore ?? summary?.roleScore ?? null;
+  const playerRole = result?.playerRole ?? summary?.playerRole ?? null;
+  const radarEntries = Object.entries(result?.radar ?? {});
+  const expectedRadarKeys = Array.isArray(result?.radarExpected)
+    ? result?.radarExpected
+    : Array.isArray(result?.radar_expected)
+      ? result?.radar_expected
+      : Array.isArray(result?.radarKeys)
+        ? result?.radarKeys
+        : Array.isArray(result?.radar_keys)
+          ? result?.radar_keys
           : null;
   const isRadarPartial =
     Array.isArray(expectedRadarKeys) &&
     expectedRadarKeys.length > 0 &&
     radarEntries.length > 0 &&
     radarEntries.length < expectedRadarKeys.length;
-  const clips = job.result?.clips ?? job.result?.assets?.clips ?? [];
+  const clips = result?.clips ?? result?.assets?.clips ?? [];
   const inputVideoUrl =
-    job.result?.assets?.inputVideoUrl ??
-    job.result?.assets?.input_video_url ??
-    job.result?.assets?.inputVideo?.signedUrl ??
-    job.result?.assets?.input_video?.signedUrl ??
+    result?.assets?.inputVideoUrl ??
+    result?.assets?.input_video_url ??
+    result?.assets?.inputVideo?.signedUrl ??
+    result?.assets?.input_video?.signedUrl ??
     null;
   const warningPayload =
-    job.result?.warnings ??
+    result?.warnings ??
     job.warnings ??
     (job as { data?: { warnings?: unknown[] } }).data?.warnings ??
     null;
   const { messages: warningMessages, codes: warningCodes } =
     extractWarnings(warningPayload);
-  const overallScoreUnavailable = summary?.overallScore == null;
+  const overallScoreUnavailable = overallScore == null;
   const overallWarning = overallScoreUnavailable ? warningMessages[0] : null;
-  const roleUnavailable = !summary?.playerRole;
+  const roleScoreUnavailable = roleScore == null;
   const clipExtractionFailed = warningCodes.includes("CLIP_EXTRACTION_FAILED");
 
   return (
     <div className="mt-6 space-y-6">
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-        <h3 className="text-lg font-semibold text-white">Result Summary</h3>
+        <h3 className="text-lg font-semibold text-white">Valutazione</h3>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
@@ -64,27 +68,36 @@ export default function ResultView({ job }: { job: JobResponse }) {
               </>
             ) : (
               <p className="mt-2 text-3xl font-semibold text-emerald-400">
-                {formatScore(summary?.overallScore)}
+                {formatScore(overallScore)}
               </p>
             )}
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
-              Role
+              Role score
             </p>
-            {roleUnavailable ? (
+            {roleScoreUnavailable ? (
               <>
                 <p className="mt-2 text-sm font-semibold text-slate-200">
-                  Unavailable
+                  Role score unavailable
                 </p>
-                <p className="mt-2 text-xs text-slate-500">
-                  Role information not provided.
-                </p>
+                {playerRole ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Role: {playerRole}
+                  </p>
+                ) : null}
               </>
             ) : (
-              <p className="mt-2 text-xl font-semibold text-white">
-                {summary?.playerRole}
-              </p>
+              <>
+                <p className="mt-2 text-2xl font-semibold text-white">
+                  {formatScore(roleScore)}
+                </p>
+                {playerRole ? (
+                  <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                    {playerRole}
+                  </p>
+                ) : null}
+              </>
             )}
           </div>
         </div>
@@ -92,7 +105,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
         <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-lg font-semibold text-white">Radar Breakdown</h4>
+          <h4 className="text-lg font-semibold text-white">Radar</h4>
           {isRadarPartial ? (
             <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
               partial radar
