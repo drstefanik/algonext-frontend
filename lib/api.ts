@@ -13,8 +13,8 @@ type CreateJobVideoPayload =
 export type CreateJobPayload = CreateJobVideoPayload & {
   role: string;
   category: string;
-  shirt_number: number;
-  team_name: string;
+  shirt_number?: number;
+  team_name?: string;
 };
 
 export type JobStatus =
@@ -157,6 +157,11 @@ export type TrackCandidate = {
   avgBoxArea?: number | null;
   thumbnailUrl?: string | null;
   tier?: string | null;
+};
+
+export type TrackCandidatesResponse = {
+  candidates: TrackCandidate[];
+  fallbackCandidates: TrackCandidate[];
 };
 
 type UnknownRecord = Record<string, any>;
@@ -341,9 +346,9 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
   };
 };
 
-const normalizeTrackCandidates = (payload: unknown): TrackCandidate[] => {
+const normalizeTrackCandidates = (payload: unknown): TrackCandidatesResponse => {
   if (!payload) {
-    return [];
+    return { candidates: [], fallbackCandidates: [] };
   }
   const source = Array.isArray(payload)
     ? payload
@@ -351,12 +356,25 @@ const normalizeTrackCandidates = (payload: unknown): TrackCandidate[] => {
       (payload as UnknownRecord).candidates ??
       (payload as UnknownRecord).tracks ??
       [];
+  const fallbackSource = Array.isArray(payload)
+    ? []
+    : (payload as UnknownRecord).fallback_candidates ??
+      (payload as UnknownRecord).fallbackCandidates ??
+      (payload as UnknownRecord).best_matches ??
+      (payload as UnknownRecord).bestMatches ??
+      (payload as UnknownRecord).fallback ??
+      [];
 
-  if (!Array.isArray(source)) {
-    return [];
-  }
+  const candidates = Array.isArray(source)
+    ? source.map(mapTrackCandidate).filter((candidate) => Boolean(candidate.trackId))
+    : [];
+  const fallbackCandidates = Array.isArray(fallbackSource)
+    ? fallbackSource
+        .map(mapTrackCandidate)
+        .filter((candidate) => Boolean(candidate.trackId))
+    : [];
 
-  return source.map(mapTrackCandidate).filter((candidate) => Boolean(candidate.trackId));
+  return { candidates, fallbackCandidates };
 };
 
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
@@ -695,7 +713,9 @@ export async function saveJobTargetSelection(
   return responsePayload;
 }
 
-export async function getJobTrackCandidates(jobId: string) {
+export async function getJobTrackCandidates(
+  jobId: string
+): Promise<TrackCandidatesResponse> {
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/candidates`, {
     method: "GET",
     cache: "no-store"
