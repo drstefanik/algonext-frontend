@@ -140,6 +140,8 @@ export type FrameSelection = {
 export type TargetSelection = {
   frameTimeSec: number | null;
   frame_time_sec?: number | null;
+  frame_key?: string | null;
+  frameKey?: string | null;
   x: number;
   y: number;
   w: number;
