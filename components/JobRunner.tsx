@@ -462,6 +462,11 @@ export default function JobRunner() {
       : null
   );
   const framesProcessedCount = Math.max(framesProcessed ?? 0, 0);
+  const isProcessingWithoutCandidates =
+    isProcessingStatus && trackCandidates.length === 0;
+  const playerCtaLabel = isProcessingWithoutCandidates
+    ? `Detecting players… (${framesProcessedCount} frames processed)`
+    : "Select player now";
   const canShowPlayerCandidates =
     Boolean(jobId) &&
     !hasPlayer &&
@@ -2026,11 +2031,12 @@ export default function JobRunner() {
             <button
               type="button"
               onClick={handleFocusStep}
-              className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60"
+              disabled={effectiveStep === "PLAYER" && isProcessingWithoutCandidates}
+              className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {effectiveStep === "TARGET"
                 ? "Select target now"
-                : "Select player now"}
+                : playerCtaLabel}
             </button>
           ) : null}
 
@@ -2046,7 +2052,15 @@ export default function JobRunner() {
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Frames processed
+              </p>
+              <p className="mt-2 text-sm text-slate-200">
+                {framesProcessedCount}
+              </p>
+            </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
                 Created
