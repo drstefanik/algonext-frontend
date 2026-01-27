@@ -457,6 +457,18 @@ export default function JobRunner() {
     autodetectionStatus !== "DISABLED" &&
     autodetectionStatus !== "NONE";
   const autodetectLowCoverage = autodetectionStatus === "LOW_COVERAGE";
+  const rawErrorDetail =
+    typeof job?.error_detail === "string"
+      ? job.error_detail
+      : typeof job?.errorDetail === "string"
+        ? job.errorDetail
+        : typeof job?.progress?.error_detail === "string"
+          ? job.progress.error_detail
+          : typeof job?.progress?.errorDetail === "string"
+            ? job.progress.errorDetail
+            : null;
+  const errorDetail = rawErrorDetail?.trim() ?? null;
+  const hasAutodetectErrorDetail = Boolean(errorDetail);
   const framesProcessed = coerceNumber(
     job?.progress && typeof job.progress === "object"
       ? (job.progress as Record<string, unknown>).framesProcessed ??
@@ -466,11 +478,24 @@ export default function JobRunner() {
       : null
   );
   const framesProcessedCount = Math.max(framesProcessed ?? 0, 0);
+  const totalTracks = coerceNumber(
+    job?.progress && typeof job.progress === "object"
+      ? (job.progress as Record<string, unknown>).totalTracks ??
+          (job.progress as Record<string, unknown>).total_tracks ??
+          (job.progress as Record<string, unknown>).tracksTotal ??
+          (job.progress as Record<string, unknown>).tracks_total
+      : null
+  );
+  const totalTracksCount = Math.max(totalTracks ?? 0, 0);
   const isProcessingWithoutCandidates =
     isProcessingStatus && trackCandidates.length === 0;
-  const playerCtaLabel = isProcessingWithoutCandidates
-    ? `Detecting players… (${framesProcessedCount} frames processed)`
-    : "Select player now";
+  const isPreviewReadyTracking =
+    isProcessingStatus && framesProcessedCount > 0 && totalTracksCount === 0;
+  const playerCtaLabel = isPreviewReadyTracking
+    ? "Detecting players… (preview ready, tracking running)"
+    : isProcessingWithoutCandidates
+      ? `Detecting players… (${framesProcessedCount} frames processed)`
+      : "Select player now";
   const canShowPlayerCandidates =
     Boolean(jobId) &&
     !hasPlayer &&
@@ -497,7 +522,12 @@ export default function JobRunner() {
     (previewsReady || isCandidatesFailed) &&
     !selectedTrackId &&
     ((isLowCoverageStatus && framesProcessedCount >= MIN_FRAMES) ||
+      (autodetectLowCoverage && hasAutodetectErrorDetail) ||
       isCandidatesFailed);
+  const manualFallbackMessage =
+    autodetectLowCoverage && hasAutodetectErrorDetail
+      ? errorDetail
+      : "Autodetection coverage is low. Use the manual fallback below.";
   const canShowFrameSelector =
     (showTargetSection && previewsReady) ||
     (showManualPlayerFallback &&
@@ -1904,7 +1934,7 @@ export default function JobRunner() {
                     </div>
                   ) : isDetectingPlayers ? null : showManualPlayerFallback ? (
                     <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                      Autodetection coverage is low. Use the manual fallback below.
+                      {manualFallbackMessage}
                     </div>
                   ) : (
                     <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
