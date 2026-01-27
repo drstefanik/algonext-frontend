@@ -308,6 +308,17 @@ const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
 };
 
 const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
+  const sampleFramesSource =
+    candidate.sampleFrames ??
+    candidate.sample_frames ??
+    candidate.samples ??
+    candidate.frames ??
+    [];
+  const sampleFrames = Array.isArray(sampleFramesSource) ? sampleFramesSource : [];
+  const primarySample =
+    sampleFrames.length > 0 && sampleFrames[0] && typeof sampleFrames[0] === "object"
+      ? (sampleFrames[0] as UnknownRecord)
+      : null;
   const trackId =
     String(
       candidate.trackId ??
@@ -333,6 +344,10 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.frame_url ??
     candidate.imageUrl ??
     candidate.image_url ??
+    primarySample?.imageUrl ??
+    primarySample?.image_url ??
+    primarySample?.frameUrl ??
+    primarySample?.frame_url ??
     null;
   const tier =
     candidate.tier ??
@@ -348,6 +363,11 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.box ??
     candidate.bounding_box ??
     candidate.boundingBox ??
+    primarySample?.bbox_xywh ??
+    primarySample?.bbox ??
+    primarySample?.box ??
+    primarySample?.bounding_box ??
+    primarySample?.boundingBox ??
     null;
   const frameTimeSec = coerceNumber(
     candidate.frameTimeSec ??
@@ -356,12 +376,19 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
       candidate.timeSec ??
       candidate.t ??
       candidate.sample_time_sec ??
-      candidate.sampleTimeSec
+      candidate.sampleTimeSec ??
+      primarySample?.frameTimeSec ??
+      primarySample?.frame_time_sec ??
+      primarySample?.time_sec ??
+      primarySample?.timeSec ??
+      primarySample?.t ??
+      primarySample?.sample_time_sec ??
+      primarySample?.sampleTimeSec
   );
-  const x = coerceNumber(bboxSource?.x ?? candidate.x);
-  const y = coerceNumber(bboxSource?.y ?? candidate.y);
-  const w = coerceNumber(bboxSource?.w ?? candidate.w);
-  const h = coerceNumber(bboxSource?.h ?? candidate.h);
+  const x = coerceNumber(bboxSource?.x ?? candidate.x ?? primarySample?.x);
+  const y = coerceNumber(bboxSource?.y ?? candidate.y ?? primarySample?.y);
+  const w = coerceNumber(bboxSource?.w ?? candidate.w ?? primarySample?.w);
+  const h = coerceNumber(bboxSource?.h ?? candidate.h ?? primarySample?.h);
 
   return {
     trackId,
@@ -783,11 +810,17 @@ export async function selectJobTrack(jobId: string, candidate: TrackCandidate) {
     throw new Error("Missing selection data for track candidate.");
   }
   const requestPayload = {
-    frame_time_sec: frameTimeSec,
-    x,
-    y,
-    w,
-    h
+    trackId: candidate.trackId,
+    selection: {
+      time_sec: frameTimeSec,
+      frame_time_sec: frameTimeSec,
+      bbox: {
+        x,
+        y,
+        w,
+        h
+      }
+    }
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/select-track`, {
     method: "POST",
