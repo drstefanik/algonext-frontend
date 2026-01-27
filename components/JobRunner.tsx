@@ -52,6 +52,14 @@ const coerceNumber = (value: unknown): number | null => {
   return null;
 };
 
+const getTimeSec = (x: any): number | null =>
+  x?.timeSec ?? x?.time_sec ?? x?.frameTimeSec ?? x?.frame_time_sec ?? null;
+
+const getFrameKey = (x: any): string | null =>
+  x?.frameKey ?? x?.frame_key ?? x?.key ?? null;
+
+const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+
 const formatFrameTime = (timeSec: number | null) =>
   timeSec === null ? "—" : `${timeSec.toFixed(2)}s`;
 
@@ -90,7 +98,7 @@ const mapFrameItemToPreviewFrame = (
   frame: FrameItem,
   index: number
 ): PreviewFrame => {
-  const timeSec = coerceNumber(frame.time_sec);
+  const timeSec = coerceNumber(getTimeSec(frame));
   const key = frame.key ?? `frame-${timeSec}-${index}`;
   return {
     timeSec,
@@ -103,8 +111,7 @@ const mapFrameItemToPreviewFrame = (
 };
 
 const getCandidateSelection = (candidate: TrackCandidate) => {
-  const frameTimeSec =
-    candidate.frameTimeSec ?? candidate.frame_time_sec ?? candidate.t ?? null;
+  const frameTimeSec = getTimeSec(candidate) ?? candidate.t ?? null;
   const { x, y, w, h } = candidate;
   if (
     frameTimeSec === null ||
@@ -341,6 +348,8 @@ export default function JobRunner() {
   const [targetSelection, setTargetSelection] = useState<TargetSelection | null>(
     null
   );
+  const [draftTargetSelection, setDraftTargetSelection] =
+    useState<TargetSelection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
@@ -601,6 +610,10 @@ export default function JobRunner() {
     totalTracksCount > 0 && trackCandidates.length === 0 && !loadingTrackCandidates;
   const hasCandidateList =
     trackCandidates.length > 0 || fallbackCandidates.length > 0;
+  const [previewImageSize, setPreviewImageSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   const activePreviewRect = previewDragState
     ? {
@@ -610,6 +623,64 @@ export default function JobRunner() {
         height: Math.abs(previewDragState.currentY - previewDragState.startY)
       }
     : null;
+
+  const selectionMatchesFrame = (
+    selection: TargetSelection | FrameSelection | null,
+    frame: PreviewFrame | null
+  ) => {
+    if (!selection || !frame) {
+      return false;
+    }
+    const selectionKey = getFrameKey(selection);
+    const frameKey = getFrameKey(frame);
+    if (selectionKey && frameKey) {
+      return selectionKey === frameKey;
+    }
+    const selectionTime = getTimeSec(selection);
+    const frameTime = getTimeSec(frame);
+    if (selectionTime == null || frameTime == null) {
+      return false;
+    }
+    return Math.abs(selectionTime - frameTime) < 0.05;
+  };
+
+  const resolveTargetPreviewFrame = (selection: TargetSelection | null) => {
+    if (!selection) {
+      return null;
+    }
+    const selectionKey = getFrameKey(selection);
+    if (selectionKey) {
+      return (
+        previewFramesWithImages.find(
+          (frame) => getFrameKey(frame) === selectionKey
+        ) ?? null
+      );
+    }
+    const targetTime = getTimeSec(selection);
+    if (targetTime == null) {
+      return null;
+    }
+    return (
+      previewFramesWithImages.find((frame) => {
+        const frameTime = getTimeSec(frame);
+        return frameTime != null && Math.abs(frameTime - targetTime) < 0.05;
+      }) ?? null
+    );
+  };
+
+  const getSelectionDisplayRect = (
+    selection: TargetSelection | FrameSelection | null
+  ) => {
+    if (!selection || !previewImageSize) {
+      return null;
+    }
+    return {
+      left: selection.x * previewImageSize.width,
+      top: selection.y * previewImageSize.height,
+      width: selection.w * previewImageSize.width,
+      height: selection.h * previewImageSize.height
+    };
+  };
 
   const getPreviewFrameSrc = (frame: PreviewFrame) => {
     const frameUrl = resolvePreviewFrameUrl(frame);
@@ -648,6 +719,15 @@ export default function JobRunner() {
       delete next[frame.key];
       return next;
     });
+    if (selectedPreviewFrame && frame.key === selectedPreviewFrame.key) {
+      const image = previewImageRef.current;
+      if (image) {
+        setPreviewImageSize({
+          width: image.clientWidth,
+          height: image.clientHeight
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -748,13 +828,44 @@ export default function JobRunner() {
   useEffect(() => {
     if (jobTargetSelection) {
       setTargetSelection(jobTargetSelection);
+      setDraftTargetSelection(jobTargetSelection);
     }
   }, [jobTargetSelection]);
 
   useEffect(() => {
     setPlayerSaved(Boolean(job?.playerRef || selectedTrackId));
-    setTargetSaved(Boolean(job?.target?.selections?.length));
-  }, [job?.playerRef, job?.target?.selections?.length, selectedTrackId]);
+    if (job?.target?.selections?.length) {
+      setTargetSaved(true);
+    } else if (!draftTargetSelection) {
+      setTargetSaved(false);
+    }
+  }, [
+    job?.playerRef,
+    job?.target?.selections?.length,
+    selectedTrackId,
+    draftTargetSelection
+  ]);
+
+  useEffect(() => {
+    if (!selectedPreviewFrame) {
+      setPreviewImageSize(null);
+      return;
+    }
+    const updateSize = () => {
+      const image = previewImageRef.current;
+      if (image) {
+        setPreviewImageSize({
+          width: image.clientWidth,
+          height: image.clientHeight
+        });
+      }
+    };
+    updateSize();
+    window.addEventListener("resize", updateSize);
+    return () => {
+      window.removeEventListener("resize", updateSize);
+    };
+  }, [selectedPreviewFrame]);
 
   useEffect(() => {
     if (!shouldPollFrameList) {
@@ -1102,7 +1213,7 @@ export default function JobRunner() {
   };
 
   const handleSaveSelection = async () => {
-    if (!jobId || !targetSelection) {
+    if (!jobId || !draftTargetSelection) {
       return;
     }
     setSelectionError(null);
@@ -1110,10 +1221,12 @@ export default function JobRunner() {
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
-        selections: [targetSelection]
+        selections: [draftTargetSelection]
       });
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
+      setTargetSelection(draftTargetSelection);
+      setTargetSaved(true);
       setSelectionSuccess("Selection saved");
     } catch (saveError) {
       setSelectionError(toErrorMessage(saveError));
@@ -1137,6 +1250,16 @@ export default function JobRunner() {
     setPlayerRefSelection(null);
     setPreviewDragState(null);
     setPlayerRefError(null);
+    if (mode === "target") {
+      setSelectionError(null);
+      setSelectionSuccess(null);
+      const existingSelection = draftTargetSelection ?? targetSelection;
+      if (existingSelection && selectionMatchesFrame(existingSelection, frame)) {
+        setDraftTargetSelection(existingSelection);
+      } else {
+        setDraftTargetSelection(null);
+      }
+    }
   };
 
   const handleClosePreview = () => {
@@ -1193,6 +1316,12 @@ export default function JobRunner() {
       setPreviewDragState(null);
       return;
     }
+    const displayWidth = image.clientWidth;
+    const displayHeight = image.clientHeight;
+    if (!displayWidth || !displayHeight) {
+      setPreviewDragState(null);
+      return;
+    }
     const { startX, startY, currentX, currentY } = previewDragState;
     const left = Math.min(startX, currentX);
     const top = Math.min(startY, currentY);
@@ -1200,22 +1329,34 @@ export default function JobRunner() {
     const height = Math.abs(currentY - startY);
 
     if (width > 1 && height > 1) {
+      const x1 = clamp(left / displayWidth);
+      const y1 = clamp(top / displayHeight);
+      const x2 = clamp((left + width) / displayWidth);
+      const y2 = clamp((top + height) / displayHeight);
+      const normalized = {
+        x: x1,
+        y: y1,
+        w: clamp(x2 - x1),
+        h: clamp(y2 - y1)
+      };
       if (previewMode === "player-ref") {
         setPlayerRefSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
-          x: left / image.clientWidth,
-          y: top / image.clientHeight,
-          w: width / image.clientWidth,
-          h: height / image.clientHeight
+          x: normalized.x,
+          y: normalized.y,
+          w: normalized.w,
+          h: normalized.h
         });
       } else {
         setSelectionSuccess(null);
-        setTargetSelection({
+        setSelectionError(null);
+        setDraftTargetSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
-          x: left / image.clientWidth,
-          y: top / image.clientHeight,
-          w: width / image.clientWidth,
-          h: height / image.clientHeight
+          frame_key: selectedPreviewFrame.key,
+          x: normalized.x,
+          y: normalized.y,
+          w: normalized.w,
+          h: normalized.h
         });
       }
     }
@@ -1373,6 +1514,7 @@ export default function JobRunner() {
     setJobId(null);
     setJob(null);
     setTargetSelection(null);
+    setDraftTargetSelection(null);
     setError(null);
     setSelectionError(null);
     setSelectionSuccess(null);
@@ -1454,6 +1596,17 @@ export default function JobRunner() {
           : 0
       });
     }
+    setSelectionError(null);
+    const resolvedTargetFrame = resolveTargetPreviewFrame(
+      draftTargetSelection ?? targetSelection
+    );
+    if (draftTargetSelection ?? targetSelection) {
+      if (resolvedTargetFrame) {
+        handleOpenPreview(resolvedTargetFrame, "target");
+      } else {
+        setSelectionError("Impossibile risolvere il frame del target.");
+      }
+    }
     setGridMode("target");
     playerSectionRef.current?.scrollIntoView({
       behavior: "smooth",
@@ -1462,7 +1615,7 @@ export default function JobRunner() {
   };
 
   const playerRefMissingTime = playerRefSelection?.frameTimeSec == null;
-  const targetMissingTime = targetSelection?.frameTimeSec == null;
+  const targetMissingTime = getTimeSec(draftTargetSelection) == null;
   const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
 
   return (
@@ -2520,7 +2673,9 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={handleSaveSelection}
-                  disabled={savingSelection || !targetSelection || targetMissingTime}
+                  disabled={
+                    savingSelection || !draftTargetSelection || targetMissingTime
+                  }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Saving..." : "Save selection"}
@@ -2528,7 +2683,7 @@ export default function JobRunner() {
                 <span className="text-xs text-slate-500">
                   {targetMissingTime
                     ? "Frame missing time_sec."
-                    : targetSelection
+                    : draftTargetSelection
                     ? "Ready to save selection."
                     : "Select one box to continue."}
                 </span>
@@ -2617,26 +2772,44 @@ export default function JobRunner() {
               )}
               <div className="pointer-events-none absolute inset-0">
                 {previewMode === "player-ref" && playerRefSelection ? (
-                  <div
-                    className="absolute rounded border border-emerald-400 bg-emerald-400/20"
-                    style={{
-                      left: `${playerRefSelection.x * 100}%`,
-                      top: `${playerRefSelection.y * 100}%`,
-                      width: `${playerRefSelection.w * 100}%`,
-                      height: `${playerRefSelection.h * 100}%`
-                    }}
-                  />
+                  (() => {
+                    const rect = getSelectionDisplayRect(playerRefSelection);
+                    if (!rect) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        className="absolute rounded border border-emerald-400 bg-emerald-400/20"
+                        style={{
+                          left: `${rect.left}px`,
+                          top: `${rect.top}px`,
+                          width: `${rect.width}px`,
+                          height: `${rect.height}px`
+                        }}
+                      />
+                    );
+                  })()
                 ) : null}
-                {previewMode === "target" && targetSelection ? (
-                  <div
-                    className="absolute rounded border border-amber-400 bg-amber-400/20"
-                    style={{
-                      left: `${targetSelection.x * 100}%`,
-                      top: `${targetSelection.y * 100}%`,
-                      width: `${targetSelection.w * 100}%`,
-                      height: `${targetSelection.h * 100}%`
-                    }}
-                  />
+                {previewMode === "target" &&
+                draftTargetSelection &&
+                selectionMatchesFrame(draftTargetSelection, selectedPreviewFrame) ? (
+                  (() => {
+                    const rect = getSelectionDisplayRect(draftTargetSelection);
+                    if (!rect) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        className="absolute rounded border border-amber-400 bg-amber-400/20"
+                        style={{
+                          left: `${rect.left}px`,
+                          top: `${rect.top}px`,
+                          width: `${rect.width}px`,
+                          height: `${rect.height}px`
+                        }}
+                      />
+                    );
+                  })()
                 ) : null}
                 {activePreviewRect ? (
                   <div
@@ -2658,7 +2831,7 @@ export default function JobRunner() {
                   ? "Frame missing time_sec."
                   : previewMode === "player-ref" && playerRefSelection
                   ? "Bounding box ready. Save to continue."
-                  : previewMode === "target" && targetSelection
+                  : previewMode === "target" && draftTargetSelection
                   ? "Bounding box ready. Save to continue."
                   : previewMode === "target"
                   ? "Drag on the image to draw the target box."
