@@ -343,6 +343,9 @@ export default function JobRunner() {
   const [playerSaved, setPlayerSaved] = useState(false);
   const [targetSaved, setTargetSaved] = useState(false);
   const [trackCandidates, setTrackCandidates] = useState<TrackCandidate[]>([]);
+  const [fallbackCandidates, setFallbackCandidates] = useState<TrackCandidate[]>(
+    []
+  );
   const [loadingTrackCandidates, setLoadingTrackCandidates] = useState(false);
   const [candidatePolling, setCandidatePolling] = useState(false);
   const [showSecondaryCandidates, setShowSecondaryCandidates] = useState(false);
@@ -502,6 +505,7 @@ export default function JobRunner() {
     (previewsReady ||
       (isCandidatesFailed && hasAnyPreviewFrames) ||
       trackCandidates.length > 0 ||
+      fallbackCandidates.length > 0 ||
       loadingTrackCandidates ||
       candidatePolling ||
       autodetectEnabled);
@@ -558,6 +562,11 @@ export default function JobRunner() {
       }
     );
   }, [trackCandidates]);
+
+  const showBestMatchMessage =
+    totalTracksCount > 0 && trackCandidates.length === 0 && !loadingTrackCandidates;
+  const hasCandidateList =
+    trackCandidates.length > 0 || fallbackCandidates.length > 0;
 
   const activePreviewRect = previewDragState
     ? {
@@ -729,6 +738,7 @@ export default function JobRunner() {
       setPreviewImageErrors({});
       setPreviewError(null);
       setTrackCandidates([]);
+      setFallbackCandidates([]);
       setLoadingTrackCandidates(false);
       setCandidatePolling(false);
       setPlayerCandidateError(null);
@@ -773,16 +783,18 @@ export default function JobRunner() {
 
       setCandidatePolling(true);
       try {
-        const candidates = await getJobTrackCandidates(jobId);
+        const { candidates, fallbackCandidates: fallbackList } =
+          await getJobTrackCandidates(jobId);
         if (!isMounted) {
           return;
         }
         setTrackCandidates(candidates);
+        setFallbackCandidates(fallbackList);
         setShowSecondaryCandidates(false);
         setShowAllCandidates(false);
         setPlayerCandidateError(null);
 
-        if (candidates.length > 0) {
+        if (candidates.length > 0 || fallbackList.length > 0) {
           setCandidatePolling(false);
           return;
         }
@@ -961,6 +973,7 @@ export default function JobRunner() {
       setPlayerSaved(false);
       setTargetSaved(false);
       setTrackCandidates([]);
+      setFallbackCandidates([]);
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
       setSelectedTrackId(null);
@@ -1005,12 +1018,15 @@ export default function JobRunner() {
     setLoadingTrackCandidates(true);
     setPlayerCandidateError(null);
     try {
-      const candidates = await getJobTrackCandidates(jobId);
+      const { candidates, fallbackCandidates: fallbackList } =
+        await getJobTrackCandidates(jobId);
       setTrackCandidates(candidates);
+      setFallbackCandidates(fallbackList);
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
     } catch (fetchError) {
       setTrackCandidates([]);
+      setFallbackCandidates([]);
       setPlayerCandidateError(toErrorMessage(fetchError));
     } finally {
       setLoadingTrackCandidates(false);
@@ -1302,7 +1318,7 @@ export default function JobRunner() {
     setVideoUrl("");
     setRole("Striker");
     setCategory("U17");
-    setShirtNumber(9);
+    setShirtNumber("");
     setTeamName("");
     setJobId(null);
     setJob(null);
@@ -1320,6 +1336,7 @@ export default function JobRunner() {
     setPlayerSaved(false);
     setTargetSaved(false);
     setTrackCandidates([]);
+    setFallbackCandidates([]);
     setLoadingTrackCandidates(false);
     setCandidatePolling(false);
     setShowSecondaryCandidates(false);
@@ -1551,6 +1568,12 @@ export default function JobRunner() {
                       Low coverage – pick the best match
                     </div>
                   ) : null}
+                  {showBestMatchMessage ? (
+                    <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-200">
+                      Auto-detection found tracks but none met the coverage rule.
+                      Showing best matches anyway.
+                    </div>
+                  ) : null}
                   {isDetectingPlayers ? (
                     <div className="flex items-center gap-2 text-sm text-slate-400">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
@@ -1572,269 +1595,395 @@ export default function JobRunner() {
                       {playerCandidateError}
                     </div>
                   ) : null}
-                  {trackCandidates.length > 0 ? (
+                  {hasCandidateList ? (
                     <div className="space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                          Tabs
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {secondaryCandidates.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => setShowSecondaryCandidates((prev) => !prev)}
-                              className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                            >
-                              {showSecondaryCandidates ? "Show less" : "Show more"}
-                            </button>
-                          ) : null}
-                          {otherCandidates.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowAllCandidates((prev) => {
-                                  const next = !prev;
-                                  if (next) {
-                                    setShowSecondaryCandidates(true);
-                                  }
-                                  return next;
-                                });
-                              }}
-                              className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                            >
-                              {showAllCandidates ? "Show less" : "Show all"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {primaryCandidates.length > 0 ? (
-                        <div className="space-y-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                            Primary
-                          </p>
-                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                            {primaryCandidates.map((candidate) => {
-                              const thumbnailSrc = getCandidateThumbnailSrc(candidate);
-                              const isSelected = selectedTrackId === candidate.trackId;
-                              const isSelecting = selectingTrackId === candidate.trackId;
-                              const highStability =
-                                candidate.stability !== null &&
-                                candidate.stability !== undefined &&
-                                candidate.stability > 0.85;
-                              const lowCoverage =
-                                candidate.coverage !== null &&
-                                candidate.coverage !== undefined &&
-                                candidate.coverage < 0.07;
-                              return (
+                      {trackCandidates.length > 0 ? (
+                        <>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                              Tabs
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {secondaryCandidates.length > 0 ? (
                                 <button
-                                  key={candidate.trackId}
                                   type="button"
-                                  onClick={() => handleSelectTrack(candidate.trackId)}
-                                  disabled={isSelecting || isSelected}
-                                  aria-pressed={isSelected}
-                                  className={`overflow-hidden rounded-xl border text-left transition ${
-                                    isSelected
-                                      ? "border-emerald-400/60 bg-emerald-500/10"
-                                      : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                  } ${isSelecting || isSelected ? "cursor-not-allowed" : ""}`}
+                                  onClick={() => setShowSecondaryCandidates((prev) => !prev)}
+                                  className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
                                 >
-                                  <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                    {thumbnailSrc ? (
-                                      <img
-                                        src={thumbnailSrc}
-                                        alt={`Candidate ${candidate.trackId}`}
-                                        className="h-full w-full object-cover"
-                                      />
-                                    ) : (
-                                      <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                        No thumbnail
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="space-y-3 p-3 text-sm text-slate-200">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                        Track {candidate.trackId}
-                                      </span>
-                                      {isSelected ? (
-                                        <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                          Selected
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                    {(highStability || lowCoverage) && (
-                                      <div className="flex flex-wrap gap-2">
-                                        {highStability ? (
-                                          <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                            High stability
-                                          </span>
-                                        ) : null}
-                                        {lowCoverage ? (
-                                          <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                            Low coverage
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                    )}
-                                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Coverage pct
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatPercent(candidate.coverage)}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Stability score
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatScore(candidate.stability)}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Avg area
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatMetric(candidate.avgBoxArea)}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                      {isSelecting
-                                        ? "Selecting..."
-                                        : isSelected
-                                          ? "Selected"
-                                          : "Click to select"}
-                                    </div>
-                                  </div>
+                                  {showSecondaryCandidates ? "Show less" : "Show more"}
                                 </button>
-                              );
-                            })}
+                              ) : null}
+                              {otherCandidates.length > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowAllCandidates((prev) => {
+                                      const next = !prev;
+                                      if (next) {
+                                        setShowSecondaryCandidates(true);
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                                >
+                                  {showAllCandidates ? "Show less" : "Show all"}
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
+
+                          {primaryCandidates.length > 0 ? (
+                            <div className="space-y-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                Primary
+                              </p>
+                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                {primaryCandidates.map((candidate) => {
+                                  const thumbnailSrc = getCandidateThumbnailSrc(candidate);
+                                  const isSelected =
+                                    selectedTrackId === candidate.trackId;
+                                  const isSelecting =
+                                    selectingTrackId === candidate.trackId;
+                                  const highStability =
+                                    candidate.stability !== null &&
+                                    candidate.stability !== undefined &&
+                                    candidate.stability > 0.85;
+                                  const lowCoverage =
+                                    candidate.coverage !== null &&
+                                    candidate.coverage !== undefined &&
+                                    candidate.coverage < 0.07;
+                                  return (
+                                    <button
+                                      key={candidate.trackId}
+                                      type="button"
+                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      disabled={isSelecting || isSelected}
+                                      aria-pressed={isSelected}
+                                      className={`overflow-hidden rounded-xl border text-left transition ${
+                                        isSelected
+                                          ? "border-emerald-400/60 bg-emerald-500/10"
+                                          : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                      } ${
+                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                      }`}
+                                    >
+                                      <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                        {thumbnailSrc ? (
+                                          <img
+                                            src={thumbnailSrc}
+                                            alt={`Candidate ${candidate.trackId}`}
+                                            className="h-full w-full object-cover"
+                                          />
+                                        ) : (
+                                          <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                            No thumbnail
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="space-y-3 p-3 text-sm text-slate-200">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                            Track {candidate.trackId}
+                                          </span>
+                                          {isSelected ? (
+                                            <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                              Selected
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        {(highStability || lowCoverage) && (
+                                          <div className="flex flex-wrap gap-2">
+                                            {highStability ? (
+                                              <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                High stability
+                                              </span>
+                                            ) : null}
+                                            {lowCoverage ? (
+                                              <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                Low coverage
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Coverage pct
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatPercent(candidate.coverage)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Stability score
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatScore(candidate.stability)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Avg area
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatMetric(candidate.avgBoxArea)}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                          {isSelecting
+                                            ? "Selecting..."
+                                            : isSelected
+                                              ? "Selected"
+                                              : "Click to select"}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {showSecondaryCandidates && secondaryCandidates.length > 0 ? (
+                            <div className="space-y-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                Secondary
+                              </p>
+                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                {secondaryCandidates.map((candidate) => {
+                                  const thumbnailSrc = getCandidateThumbnailSrc(candidate);
+                                  const isSelected =
+                                    selectedTrackId === candidate.trackId;
+                                  const isSelecting =
+                                    selectingTrackId === candidate.trackId;
+                                  const highStability =
+                                    candidate.stability !== null &&
+                                    candidate.stability !== undefined &&
+                                    candidate.stability > 0.85;
+                                  const lowCoverage =
+                                    candidate.coverage !== null &&
+                                    candidate.coverage !== undefined &&
+                                    candidate.coverage < 0.07;
+                                  return (
+                                    <button
+                                      key={candidate.trackId}
+                                      type="button"
+                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      disabled={isSelecting || isSelected}
+                                      aria-pressed={isSelected}
+                                      className={`overflow-hidden rounded-xl border text-left transition ${
+                                        isSelected
+                                          ? "border-emerald-400/60 bg-emerald-500/10"
+                                          : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                      } ${
+                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                      }`}
+                                    >
+                                      <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                        {thumbnailSrc ? (
+                                          <img
+                                            src={thumbnailSrc}
+                                            alt={`Candidate ${candidate.trackId}`}
+                                            className="h-full w-full object-cover"
+                                          />
+                                        ) : (
+                                          <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                            No thumbnail
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="space-y-3 p-3 text-sm text-slate-200">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                            Track {candidate.trackId}
+                                          </span>
+                                          {isSelected ? (
+                                            <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                              Selected
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        {(highStability || lowCoverage) && (
+                                          <div className="flex flex-wrap gap-2">
+                                            {highStability ? (
+                                              <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                High stability
+                                              </span>
+                                            ) : null}
+                                            {lowCoverage ? (
+                                              <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                Low coverage
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Coverage pct
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatPercent(candidate.coverage)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Stability score
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatScore(candidate.stability)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Avg area
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatMetric(candidate.avgBoxArea)}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                          {isSelecting
+                                            ? "Selecting..."
+                                            : isSelected
+                                              ? "Selected"
+                                              : "Click to select"}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {showAllCandidates && otherCandidates.length > 0 ? (
+                            <div className="space-y-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                Others
+                              </p>
+                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                {otherCandidates.map((candidate) => {
+                                  const thumbnailSrc = getCandidateThumbnailSrc(candidate);
+                                  const isSelected =
+                                    selectedTrackId === candidate.trackId;
+                                  const isSelecting =
+                                    selectingTrackId === candidate.trackId;
+                                  const highStability =
+                                    candidate.stability !== null &&
+                                    candidate.stability !== undefined &&
+                                    candidate.stability > 0.85;
+                                  const lowCoverage =
+                                    candidate.coverage !== null &&
+                                    candidate.coverage !== undefined &&
+                                    candidate.coverage < 0.07;
+                                  return (
+                                    <button
+                                      key={candidate.trackId}
+                                      type="button"
+                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      disabled={isSelecting || isSelected}
+                                      aria-pressed={isSelected}
+                                      className={`overflow-hidden rounded-xl border text-left transition ${
+                                        isSelected
+                                          ? "border-emerald-400/60 bg-emerald-500/10"
+                                          : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                      } ${
+                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                      }`}
+                                    >
+                                      <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                        {thumbnailSrc ? (
+                                          <img
+                                            src={thumbnailSrc}
+                                            alt={`Candidate ${candidate.trackId}`}
+                                            className="h-full w-full object-cover"
+                                          />
+                                        ) : (
+                                          <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                            No thumbnail
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="space-y-3 p-3 text-sm text-slate-200">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                            Track {candidate.trackId}
+                                          </span>
+                                          {isSelected ? (
+                                            <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                              Selected
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        {(highStability || lowCoverage) && (
+                                          <div className="flex flex-wrap gap-2">
+                                            {highStability ? (
+                                              <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                High stability
+                                              </span>
+                                            ) : null}
+                                            {lowCoverage ? (
+                                              <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                Low coverage
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Coverage pct
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatPercent(candidate.coverage)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Stability score
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatScore(candidate.stability)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="uppercase tracking-[0.2em] text-slate-500">
+                                              Avg area
+                                            </p>
+                                            <p className="mt-1 text-sm text-slate-200">
+                                              {formatMetric(candidate.avgBoxArea)}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                          {isSelecting
+                                            ? "Selecting..."
+                                            : isSelected
+                                              ? "Selected"
+                                              : "Click to select"}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
 
-                      {showSecondaryCandidates && secondaryCandidates.length > 0 ? (
+                      {fallbackCandidates.length > 0 ? (
                         <div className="space-y-3">
                           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                            Secondary
+                            Best matches (top)
                           </p>
                           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                            {secondaryCandidates.map((candidate) => {
-                              const thumbnailSrc = getCandidateThumbnailSrc(candidate);
-                              const isSelected = selectedTrackId === candidate.trackId;
-                              const isSelecting = selectingTrackId === candidate.trackId;
-                              const highStability =
-                                candidate.stability !== null &&
-                                candidate.stability !== undefined &&
-                                candidate.stability > 0.85;
-                              const lowCoverage =
-                                candidate.coverage !== null &&
-                                candidate.coverage !== undefined &&
-                                candidate.coverage < 0.07;
-                              return (
-                                <button
-                                  key={candidate.trackId}
-                                  type="button"
-                                  onClick={() => handleSelectTrack(candidate.trackId)}
-                                  disabled={isSelecting || isSelected}
-                                  aria-pressed={isSelected}
-                                  className={`overflow-hidden rounded-xl border text-left transition ${
-                                    isSelected
-                                      ? "border-emerald-400/60 bg-emerald-500/10"
-                                      : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                  } ${isSelecting || isSelected ? "cursor-not-allowed" : ""}`}
-                                >
-                                  <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                    {thumbnailSrc ? (
-                                      <img
-                                        src={thumbnailSrc}
-                                        alt={`Candidate ${candidate.trackId}`}
-                                        className="h-full w-full object-cover"
-                                      />
-                                    ) : (
-                                      <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                        No thumbnail
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="space-y-3 p-3 text-sm text-slate-200">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                        Track {candidate.trackId}
-                                      </span>
-                                      {isSelected ? (
-                                        <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                          Selected
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                    {(highStability || lowCoverage) && (
-                                      <div className="flex flex-wrap gap-2">
-                                        {highStability ? (
-                                          <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                            High stability
-                                          </span>
-                                        ) : null}
-                                        {lowCoverage ? (
-                                          <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                            Low coverage
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                    )}
-                                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Coverage pct
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatPercent(candidate.coverage)}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Stability score
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatScore(candidate.stability)}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="uppercase tracking-[0.2em] text-slate-500">
-                                          Avg area
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-200">
-                                          {formatMetric(candidate.avgBoxArea)}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                      {isSelecting
-                                        ? "Selecting..."
-                                        : isSelected
-                                          ? "Selected"
-                                          : "Click to select"}
-                                    </div>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {showAllCandidates && otherCandidates.length > 0 ? (
-                        <div className="space-y-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                            Others
-                          </p>
-                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                            {otherCandidates.map((candidate) => {
+                            {fallbackCandidates.map((candidate) => {
                               const thumbnailSrc = getCandidateThumbnailSrc(candidate);
                               const isSelected = selectedTrackId === candidate.trackId;
                               const isSelecting = selectingTrackId === candidate.trackId;
