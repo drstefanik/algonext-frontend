@@ -43,6 +43,13 @@ export async function forward(
 
     const responseBody = await upstreamResponse.text();
 
+    if (!upstreamResponse.ok) {
+      console.error("[proxy] Upstream error", {
+        status: upstreamResponse.status,
+        body: responseBody
+      });
+    }
+
     const resHeaders = new Headers();
     upstreamResponse.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();

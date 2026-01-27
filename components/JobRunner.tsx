@@ -53,7 +53,12 @@ const coerceNumber = (value: unknown): number | null => {
 };
 
 const getTimeSec = (x: any): number | null =>
-  x?.timeSec ?? x?.time_sec ?? x?.frameTimeSec ?? x?.frame_time_sec ?? null;
+  x?.timeSec ??
+  x?.time_sec ??
+  x?.frameTimeSec ??
+  x?.frame_time_sec ??
+  x?.t ??
+  null;
 
 const getFrameKey = (x: any): string | null =>
   x?.frameKey ?? x?.frame_key ?? x?.key ?? null;
@@ -446,6 +451,12 @@ export default function JobRunner() {
   const hasPlayer = Boolean(job?.playerRef || selectedTrackId);
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
+  const targetConfirmed = Boolean(
+    job?.target &&
+      typeof job.target === "object" &&
+      "confirmed" in job.target &&
+      (job.target as { confirmed?: boolean }).confirmed === true
+  );
   const status = job?.status ?? null;
   const normalizedStatus = typeof status === "string" ? status.toUpperCase() : null;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
@@ -556,8 +567,12 @@ export default function JobRunner() {
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue = hasPlayer;
-  const enqueueHint = !hasPlayer ? "Select a player to start analysis" : "Ready";
+  const canEnqueue = hasPlayer && targetConfirmed;
+  const enqueueHint = !hasPlayer
+    ? "Select a player to start analysis"
+    : !targetConfirmed
+      ? "Confirm the target to start analysis"
+      : "Ready";
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews || isPreviewsReady || selectionReady);
@@ -1145,7 +1160,11 @@ export default function JobRunner() {
       return;
     }
     if (!canEnqueue) {
-      setError("Seleziona un player per avviare l'analisi.");
+      setError(
+        !hasPlayer
+          ? "Seleziona un player per avviare l'analisi."
+          : "Conferma il target prima di avviare l'analisi."
+      );
       return;
     }
     setError(null);
@@ -1444,6 +1463,14 @@ export default function JobRunner() {
 
   const handleRestartJob = async () => {
     if (!jobId) {
+      return;
+    }
+    if (!canEnqueue) {
+      setError(
+        !hasPlayer
+          ? "Seleziona un player per riavviare l'analisi."
+          : "Conferma il target prima di riavviare l'analisi."
+      );
       return;
     }
     setError(null);
