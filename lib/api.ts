@@ -154,6 +154,18 @@ export type JobTarget = {
   [key: string]: any;
 };
 
+export type TrackCandidateSampleFrame = {
+  imageUrl?: string | null;
+  frameTimeSec?: number | null;
+  frame_time_sec?: number | null;
+  frameKey?: string | null;
+  frame_key?: string | null;
+  x?: number | null;
+  y?: number | null;
+  w?: number | null;
+  h?: number | null;
+};
+
 export type TrackCandidate = {
   trackId: string;
   coverage?: number | null;
@@ -168,6 +180,7 @@ export type TrackCandidate = {
   y?: number | null;
   w?: number | null;
   h?: number | null;
+  sampleFrames?: TrackCandidateSampleFrame[];
 };
 
 export type TrackCandidatesResponse = {
@@ -197,6 +210,8 @@ const coerceNumber = (value: unknown): number | null => {
   }
   return null;
 };
+
+const toJsonBody = (payload?: unknown) => JSON.stringify(payload ?? {});
 
 const unwrap = <T,>(payload: unknown): T => {
   if (payload && typeof payload === "object" && "ok" in payload && "data" in payload) {
@@ -347,6 +362,51 @@ const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
   };
 };
 
+const mapTrackCandidateSampleFrame = (
+  sample: UnknownRecord
+): TrackCandidateSampleFrame => {
+  const frameTimeSec = coerceNumber(
+    sample.frameTimeSec ??
+      sample.frame_time_sec ??
+      sample.t ??
+      sample.time_sec ??
+      sample.timeSec ??
+      sample.sample_time_sec ??
+      sample.sampleTimeSec
+  );
+  const frameKey = sample.frameKey ?? sample.frame_key ?? sample.key ?? null;
+  const bboxSource =
+    sample.bbox_xywh ??
+    sample.bbox ??
+    sample.box ??
+    sample.bounding_box ??
+    sample.boundingBox ??
+    null;
+  const x = coerceNumber(bboxSource?.x ?? sample.x);
+  const y = coerceNumber(bboxSource?.y ?? sample.y);
+  const w = coerceNumber(bboxSource?.w ?? sample.w);
+  const h = coerceNumber(bboxSource?.h ?? sample.h);
+  const imageUrl =
+    sample.imageUrl ??
+    sample.image_url ??
+    sample.frameUrl ??
+    sample.frame_url ??
+    sample.thumbnailUrl ??
+    sample.thumbnail_url ??
+    null;
+  return {
+    imageUrl,
+    frameTimeSec,
+    frame_time_sec: frameTimeSec,
+    frameKey,
+    frame_key: frameKey,
+    x,
+    y,
+    w,
+    h
+  };
+};
+
 const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
   const sampleFramesSource =
     candidate.sampleFrames ??
@@ -355,10 +415,11 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.frames ??
     [];
   const sampleFrames = Array.isArray(sampleFramesSource) ? sampleFramesSource : [];
+  const sampleFramesNormalized = sampleFrames
+    .filter((sample) => sample && typeof sample === "object")
+    .map((sample) => mapTrackCandidateSampleFrame(sample as UnknownRecord));
   const primarySample =
-    sampleFrames.length > 0 && sampleFrames[0] && typeof sampleFrames[0] === "object"
-      ? (sampleFrames[0] as UnknownRecord)
-      : null;
+    sampleFramesNormalized.length > 0 ? sampleFramesNormalized[0] ?? null : null;
   const trackId =
     String(
       candidate.trackId ??
@@ -385,9 +446,6 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.imageUrl ??
     candidate.image_url ??
     primarySample?.imageUrl ??
-    primarySample?.image_url ??
-    primarySample?.frameUrl ??
-    primarySample?.frame_url ??
     null;
   const tier =
     candidate.tier ??
@@ -403,12 +461,7 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.box ??
     candidate.bounding_box ??
     candidate.boundingBox ??
-    primarySample?.bbox_xywh ??
-    primarySample?.bbox ??
-    primarySample?.box ??
-    primarySample?.bounding_box ??
-    primarySample?.boundingBox ??
-    null;
+    primarySample ?? null;
   const frameTimeSec = coerceNumber(
     candidate.frameTimeSec ??
       candidate.frame_time_sec ??
@@ -418,12 +471,7 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
       candidate.sample_time_sec ??
       candidate.sampleTimeSec ??
       primarySample?.frameTimeSec ??
-      primarySample?.frame_time_sec ??
-      primarySample?.time_sec ??
-      primarySample?.timeSec ??
-      primarySample?.t ??
-      primarySample?.sample_time_sec ??
-      primarySample?.sampleTimeSec
+      primarySample?.frame_time_sec
   );
   const x = coerceNumber(bboxSource?.x ?? candidate.x ?? primarySample?.x);
   const y = coerceNumber(bboxSource?.y ?? candidate.y ?? primarySample?.y);
@@ -443,7 +491,8 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     x,
     y,
     w,
-    h
+    h,
+    sampleFrames: sampleFramesNormalized
   };
 };
 
@@ -634,15 +683,34 @@ const extractDetailMessage = (detail: unknown) => {
 
 async function handleError(response: Response) {
   let message = "";
+  let requestId: string | null = null;
 
   try {
     const data = await response.clone().json();
+    requestId =
+      data?.request_id ??
+      data?.requestId ??
+      data?.detail?.request_id ??
+      data?.detail?.requestId ??
+      null;
+    const missingFieldsSource =
+      data?.missing ??
+      data?.detail?.missing ??
+      data?.error?.missing ??
+      null;
+    const missingFields = Array.isArray(missingFieldsSource)
+      ? missingFieldsSource.filter((field) => typeof field === "string")
+      : [];
+    if (missingFields.length > 0) {
+      message = `Manca: ${missingFields.join(", ")}`;
+    }
     const detailMessage = extractDetailMessage(data?.detail);
     message =
       detailMessage ??
       (typeof data?.error === "string" ? data.error : data?.error?.message) ??
       data?.progress?.message ??
       data?.message ??
+      message ??
       null;
   } catch {
     // ignore json parsing errors
@@ -661,6 +729,10 @@ async function handleError(response: Response) {
 
   if (!message) {
     message = response.statusText || "Unexpected error";
+  }
+
+  if (requestId) {
+    console.warn("API request_id", requestId);
   }
 
   throw new Error(message);
@@ -703,7 +775,8 @@ export async function enqueueJob(jobId: string) {
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/enqueue`, {
     method: "POST",
     headers: jsonHeaders,
-    cache: "no-store"
+    cache: "no-store",
+    body: toJsonBody()
   });
 
   if (!response.ok) {
