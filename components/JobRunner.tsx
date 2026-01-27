@@ -102,6 +102,27 @@ const mapFrameItemToPreviewFrame = (
   };
 };
 
+const getCandidateSelection = (candidate: TrackCandidate) => {
+  const frameTimeSec =
+    candidate.frameTimeSec ?? candidate.frame_time_sec ?? candidate.t ?? null;
+  const { x, y, w, h } = candidate;
+  if (
+    frameTimeSec === null ||
+    frameTimeSec === undefined ||
+    x === null ||
+    x === undefined ||
+    y === null ||
+    y === undefined ||
+    w === null ||
+    w === undefined ||
+    h === null ||
+    h === undefined
+  ) {
+    return null;
+  }
+  return { frameTimeSec, x, y, w, h };
+};
+
 const buildHttpErrorMessage = async (response: Response) => {
   let message = "";
 
@@ -1037,6 +1058,13 @@ export default function JobRunner() {
     if (!jobId) {
       return;
     }
+    const selection = getCandidateSelection(candidate);
+    if (!selection) {
+      setPlayerCandidateError(
+        "Missing selection data for this candidate. Check sample frames mapping."
+      );
+      return;
+    }
     setPlayerCandidateError(null);
     setSelectingTrackId(candidate.trackId);
     try {
@@ -1645,6 +1673,9 @@ export default function JobRunner() {
                                     selectedTrackId === candidate.trackId;
                                   const isSelecting =
                                     selectingTrackId === candidate.trackId;
+                                  const hasSelectionData = Boolean(
+                                    getCandidateSelection(candidate)
+                                  );
                                   const highStability =
                                     candidate.stability !== null &&
                                     candidate.stability !== undefined &&
@@ -1658,14 +1689,16 @@ export default function JobRunner() {
                                       key={candidate.trackId}
                                       type="button"
                                       onClick={() => handleSelectTrack(candidate)}
-                                      disabled={isSelecting || isSelected}
+                                      disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
                                         isSelected
                                           ? "border-emerald-400/60 bg-emerald-500/10"
                                           : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
                                       } ${
-                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                        isSelecting || isSelected || !hasSelectionData
+                                          ? "cursor-not-allowed"
+                                          : ""
                                       }`}
                                     >
                                       <div className="h-32 w-full overflow-hidden bg-slate-900">
@@ -1737,7 +1770,9 @@ export default function JobRunner() {
                                             ? "Selecting..."
                                             : isSelected
                                               ? "Selected"
-                                              : "Click to select"}
+                                              : hasSelectionData
+                                                ? "Click to select"
+                                                : "Missing selection data"}
                                         </div>
                                       </div>
                                     </button>
@@ -1759,6 +1794,9 @@ export default function JobRunner() {
                                     selectedTrackId === candidate.trackId;
                                   const isSelecting =
                                     selectingTrackId === candidate.trackId;
+                                  const hasSelectionData = Boolean(
+                                    getCandidateSelection(candidate)
+                                  );
                                   const highStability =
                                     candidate.stability !== null &&
                                     candidate.stability !== undefined &&
@@ -1772,14 +1810,16 @@ export default function JobRunner() {
                                       key={candidate.trackId}
                                       type="button"
                                       onClick={() => handleSelectTrack(candidate)}
-                                      disabled={isSelecting || isSelected}
+                                      disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
                                         isSelected
                                           ? "border-emerald-400/60 bg-emerald-500/10"
                                           : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
                                       } ${
-                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                        isSelecting || isSelected || !hasSelectionData
+                                          ? "cursor-not-allowed"
+                                          : ""
                                       }`}
                                     >
                                       <div className="h-32 w-full overflow-hidden bg-slate-900">
@@ -1851,7 +1891,9 @@ export default function JobRunner() {
                                             ? "Selecting..."
                                             : isSelected
                                               ? "Selected"
-                                              : "Click to select"}
+                                              : hasSelectionData
+                                                ? "Click to select"
+                                                : "Missing selection data"}
                                         </div>
                                       </div>
                                     </button>
@@ -1873,6 +1915,9 @@ export default function JobRunner() {
                                     selectedTrackId === candidate.trackId;
                                   const isSelecting =
                                     selectingTrackId === candidate.trackId;
+                                  const hasSelectionData = Boolean(
+                                    getCandidateSelection(candidate)
+                                  );
                                   const highStability =
                                     candidate.stability !== null &&
                                     candidate.stability !== undefined &&
@@ -1886,14 +1931,16 @@ export default function JobRunner() {
                                       key={candidate.trackId}
                                       type="button"
                                       onClick={() => handleSelectTrack(candidate)}
-                                      disabled={isSelecting || isSelected}
+                                      disabled={isSelecting || isSelected || !hasSelectionData}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
                                         isSelected
                                           ? "border-emerald-400/60 bg-emerald-500/10"
                                           : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
                                       } ${
-                                        isSelecting || isSelected ? "cursor-not-allowed" : ""
+                                        isSelecting || isSelected || !hasSelectionData
+                                          ? "cursor-not-allowed"
+                                          : ""
                                       }`}
                                     >
                                       <div className="h-32 w-full overflow-hidden bg-slate-900">
@@ -1965,7 +2012,9 @@ export default function JobRunner() {
                                             ? "Selecting..."
                                             : isSelected
                                               ? "Selected"
-                                              : "Click to select"}
+                                              : hasSelectionData
+                                                ? "Click to select"
+                                                : "Missing selection data"}
                                         </div>
                                       </div>
                                     </button>
@@ -1987,6 +2036,9 @@ export default function JobRunner() {
                               const thumbnailSrc = getCandidateThumbnailSrc(candidate);
                               const isSelected = selectedTrackId === candidate.trackId;
                               const isSelecting = selectingTrackId === candidate.trackId;
+                              const hasSelectionData = Boolean(
+                                getCandidateSelection(candidate)
+                              );
                               const highStability =
                                 candidate.stability !== null &&
                                 candidate.stability !== undefined &&
@@ -2000,13 +2052,17 @@ export default function JobRunner() {
                                   key={candidate.trackId}
                                   type="button"
                                   onClick={() => handleSelectTrack(candidate)}
-                                  disabled={isSelecting || isSelected}
+                                  disabled={isSelecting || isSelected || !hasSelectionData}
                                   aria-pressed={isSelected}
                                   className={`overflow-hidden rounded-xl border text-left transition ${
                                     isSelected
                                       ? "border-emerald-400/60 bg-emerald-500/10"
                                       : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                  } ${isSelecting || isSelected ? "cursor-not-allowed" : ""}`}
+                                  } ${
+                                    isSelecting || isSelected || !hasSelectionData
+                                      ? "cursor-not-allowed"
+                                      : ""
+                                  }`}
                                 >
                                   <div className="h-32 w-full overflow-hidden bg-slate-900">
                                     {thumbnailSrc ? (
@@ -2077,7 +2133,9 @@ export default function JobRunner() {
                                         ? "Selecting..."
                                         : isSelected
                                           ? "Selected"
-                                          : "Click to select"}
+                                          : hasSelectionData
+                                            ? "Click to select"
+                                            : "Missing selection data"}
                                     </div>
                                   </div>
                                 </button>
