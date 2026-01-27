@@ -33,6 +33,7 @@ import { extractWarnings } from "@/lib/warnings";
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
 const REQUIRED_FRAME_COUNT = 8;
+const MIN_FRAMES = REQUIRED_FRAME_COUNT;
 
 const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
 
@@ -402,6 +403,9 @@ export default function JobRunner() {
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
   const status = job?.status ?? null;
+  const normalizedStatus = typeof status === "string" ? status.toUpperCase() : null;
+  const isProcessingStatus = normalizedStatus === "PROCESSING";
+  const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
   const warningsPayload =
     job?.result?.warnings ??
     job?.warnings ??
@@ -425,7 +429,7 @@ export default function JobRunner() {
   const previewsReady = hasFullPreviewSet;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
     ? "IDLE"
-    : status === "RUNNING" || status === "QUEUED"
+    : status === "RUNNING" || status === "QUEUED" || status === "PROCESSING"
       ? "PROCESSING"
       : previewsReady && !hasPlayer
         ? "PLAYER"
@@ -449,6 +453,15 @@ export default function JobRunner() {
     autodetectionStatus !== "DISABLED" &&
     autodetectionStatus !== "NONE";
   const autodetectLowCoverage = autodetectionStatus === "LOW_COVERAGE";
+  const framesProcessed = coerceNumber(
+    job?.progress && typeof job.progress === "object"
+      ? (job.progress as Record<string, unknown>).framesProcessed ??
+          (job.progress as Record<string, unknown>).frames_processed ??
+          (job.progress as Record<string, unknown>).processedFrames ??
+          (job.progress as Record<string, unknown>).processed_frames
+      : null
+  );
+  const framesProcessedCount = Math.max(framesProcessed ?? 0, 0);
   const canShowPlayerCandidates =
     Boolean(jobId) &&
     !hasPlayer &&
@@ -473,8 +486,8 @@ export default function JobRunner() {
     showPlayerSection &&
     previewsReady &&
     !selectedTrackId &&
-    (autodetectLowCoverage ||
-      (!autodetectEnabled && !loadingTrackCandidates && trackCandidates.length === 0));
+    isLowCoverageStatus &&
+    framesProcessedCount >= MIN_FRAMES;
   const isDetectingPlayers =
     (autodetectEnabled || candidatePolling) &&
     !autodetectLowCoverage &&
@@ -1486,7 +1499,11 @@ export default function JobRunner() {
                   {isDetectingPlayers ? (
                     <div className="flex items-center gap-2 text-sm text-slate-400">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Detecting players...</span>
+                      <span>
+                        {isProcessingStatus
+                          ? `Detecting players… (${framesProcessedCount} frames processed)`
+                          : "Detecting players..."}
+                      </span>
                     </div>
                   ) : null}
                   {!isDetectingPlayers && loadingTrackCandidates ? (
@@ -1940,6 +1957,13 @@ export default function JobRunner() {
               <div className="space-y-3 text-sm text-slate-400">
                 {playerRef ? (
                   <p>Player reference already saved.</p>
+                ) : isProcessingStatus ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-400">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                    <span>
+                      {`Detecting players… (${framesProcessedCount} frames processed)`}
+                    </span>
+                  </div>
                 ) : (
                   <>
                     <div className="flex items-center gap-2">
