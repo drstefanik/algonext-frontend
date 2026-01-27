@@ -343,6 +343,7 @@ export default function JobRunner() {
   const [targetSaved, setTargetSaved] = useState(false);
   const [trackCandidates, setTrackCandidates] = useState<TrackCandidate[]>([]);
   const [loadingTrackCandidates, setLoadingTrackCandidates] = useState(false);
+  const [candidatePolling, setCandidatePolling] = useState(false);
   const [showSecondaryCandidates, setShowSecondaryCandidates] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
@@ -426,12 +427,35 @@ export default function JobRunner() {
     ? "IDLE"
     : status === "RUNNING" || status === "QUEUED"
       ? "PROCESSING"
-      : previewsReady && !hasPlayer
-        ? "PLAYER"
-        : previewsReady && hasPlayer && !hasTarget
-          ? "TARGET"
-          : "PROCESSING";
-  const showPlayerSection = effectiveStep === "PLAYER";
+      : previewsReady && hasPlayer && !hasTarget
+        ? "TARGET"
+        : "PROCESSING";
+  const rawAutodetectionStatus =
+    typeof job?.autodetection_status === "string"
+      ? job.autodetection_status
+      : typeof job?.autodetectionStatus === "string"
+        ? job.autodetectionStatus
+        : typeof job?.progress?.autodetection_status === "string"
+          ? job.progress.autodetection_status
+          : typeof job?.progress?.autodetectionStatus === "string"
+            ? job.progress.autodetectionStatus
+            : null;
+  const autodetectionStatus = rawAutodetectionStatus?.trim().toUpperCase() ?? null;
+  const autodetectEnabled =
+    autodetectionStatus !== null &&
+    autodetectionStatus !== "OFF" &&
+    autodetectionStatus !== "DISABLED" &&
+    autodetectionStatus !== "NONE";
+  const autodetectLowCoverage = autodetectionStatus === "LOW_COVERAGE";
+  const canShowPlayerCandidates =
+    Boolean(jobId) &&
+    !hasPlayer &&
+    (previewsReady ||
+      trackCandidates.length > 0 ||
+      loadingTrackCandidates ||
+      candidatePolling ||
+      autodetectEnabled);
+  const showPlayerSection = effectiveStep === "PLAYER" || canShowPlayerCandidates;
   const showTargetSection = effectiveStep === "TARGET";
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
@@ -445,9 +469,16 @@ export default function JobRunner() {
   const frameSelectorKey = jobId ?? "frame-selector";
   const showManualPlayerFallback =
     showPlayerSection &&
-    !loadingTrackCandidates &&
+    previewsReady &&
+    !selectedTrackId &&
+    (autodetectLowCoverage ||
+      (!autodetectEnabled && !loadingTrackCandidates && trackCandidates.length === 0));
+  const isDetectingPlayers =
+    (autodetectEnabled || candidatePolling) &&
+    !autodetectLowCoverage &&
+    !selectedTrackId &&
     trackCandidates.length === 0 &&
-    !selectedTrackId;
+    !playerCandidateError;
   const { primaryCandidates, secondaryCandidates, otherCandidates } = useMemo(() => {
     return trackCandidates.reduce(
       (acc, candidate) => {
@@ -640,6 +671,7 @@ export default function JobRunner() {
       setPreviewError(null);
       setTrackCandidates([]);
       setLoadingTrackCandidates(false);
+      setCandidatePolling(false);
       setPlayerCandidateError(null);
       setSelectedTrackId(null);
       setSelectingTrackId(null);
@@ -667,41 +699,54 @@ export default function JobRunner() {
   }, [showTargetSection, showManualPlayerFallback]);
 
   useEffect(() => {
-    if (!jobId || !showPlayerSection) {
+    if (!jobId || selectedTrackId) {
       return;
     }
 
     let isMounted = true;
-    setLoadingTrackCandidates(true);
-    setPlayerCandidateError(null);
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const pollIntervalMs = 3000;
 
-    getJobTrackCandidates(jobId)
-      .then((candidates) => {
+    const pollCandidates = async () => {
+      if (!isMounted) {
+        return;
+      }
+
+      setCandidatePolling(true);
+      try {
+        const candidates = await getJobTrackCandidates(jobId);
         if (!isMounted) {
           return;
         }
         setTrackCandidates(candidates);
         setShowSecondaryCandidates(false);
         setShowAllCandidates(false);
-      })
-      .catch((fetchError) => {
+        setPlayerCandidateError(null);
+
+        if (candidates.length > 0 || autodetectLowCoverage) {
+          setCandidatePolling(false);
+          return;
+        }
+      } catch (fetchError) {
         if (!isMounted) {
           return;
         }
-        setTrackCandidates([]);
         setPlayerCandidateError(toErrorMessage(fetchError));
-      })
-      .finally(() => {
-        if (!isMounted) {
-          return;
-        }
-        setLoadingTrackCandidates(false);
-      });
+      }
+
+      timeoutId = setTimeout(pollCandidates, pollIntervalMs);
+    };
+
+    pollCandidates();
 
     return () => {
       isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      setCandidatePolling(false);
     };
-  }, [jobId, showPlayerSection]);
+  }, [jobId, selectedTrackId, autodetectLowCoverage]);
 
   useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
@@ -1212,6 +1257,7 @@ export default function JobRunner() {
     setTargetSaved(false);
     setTrackCandidates([]);
     setLoadingTrackCandidates(false);
+    setCandidatePolling(false);
     setShowSecondaryCandidates(false);
     setShowAllCandidates(false);
     setSelectedTrackId(null);
@@ -1435,7 +1481,13 @@ export default function JobRunner() {
 
               {showPlayerSection ? (
                 <div className="mt-4 space-y-4">
-                  {loadingTrackCandidates ? (
+                  {isDetectingPlayers ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                      <span>Detecting players...</span>
+                    </div>
+                  ) : null}
+                  {!isDetectingPlayers && loadingTrackCandidates ? (
                     <div className="flex items-center gap-2 text-sm text-slate-400">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
                       <span>Fetching candidates...</span>
@@ -1812,9 +1864,13 @@ export default function JobRunner() {
                         </div>
                       ) : null}
                     </div>
+                  ) : isDetectingPlayers ? null : showManualPlayerFallback ? (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      Autodetection coverage is low. Use the manual fallback below.
+                    </div>
                   ) : (
                     <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                      No candidates available yet. Use the manual fallback below.
+                      No candidates available yet.
                     </div>
                   )}
                 </div>
