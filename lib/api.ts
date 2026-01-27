@@ -64,7 +64,7 @@ export type PreviewFrame = {
   timeSec: number | null;
   key: string;
   url?: string;
-  signedUrl: string;
+  signedUrl?: string;
   width?: number | null;
   height?: number | null;
 };
@@ -106,6 +106,7 @@ export type JobResponse = {
   previewFrames?: PreviewFrame[];
   result?: JobResult;
   playerRef?: FrameSelection;
+  playerRefRaw?: unknown;
   target?: JobTarget;
   error?: string;
   warnings?: unknown[];
@@ -203,9 +204,33 @@ const unwrap = <T,>(payload: unknown): T => {
 
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
-  const key = frame.key ?? `frame-${timeSec}`;
-  const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
-  const signedUrl = frame.signedUrl ?? frame.signed_url ?? frame.url ?? "";
+  const key =
+    frame.key ??
+    frame.frame_key ??
+    frame.s3_key ??
+    frame.s3Key ??
+    `frame-${timeSec}`;
+  const signedUrl = frame.signedUrl ?? frame.signed_url ?? null;
+  const imageUrl =
+    frame.imageUrl ??
+    frame.image_url ??
+    frame.url ??
+    frame.public_url ??
+    frame.publicUrl ??
+    null;
+  const bucket = frame.bucket ?? frame.s3_bucket ?? frame.s3Bucket ?? null;
+  const isPublic =
+    frame.is_public ??
+    frame.isPublic ??
+    frame.public ??
+    frame.publicly_accessible ??
+    frame.publiclyAccessible ??
+    false;
+  const publicUrl =
+    !signedUrl && !imageUrl && isPublic && bucket && key
+      ? `https://${bucket}.s3.amazonaws.com/${key}`
+      : null;
+  const url = imageUrl ?? publicUrl ?? signedUrl ?? "";
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
 
@@ -214,7 +239,7 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
     timeSec,
     key,
     url,
-    signedUrl,
+    signedUrl: signedUrl ?? undefined,
     width,
     height
   };
@@ -223,7 +248,13 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
 const mapFrameListItem = (frame: UnknownRecord): FrameItem => {
   const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
   const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec ?? 0}`;
-  const url = frame.url ?? frame.signedUrl ?? frame.signed_url ?? "";
+  const url =
+    frame.signedUrl ??
+    frame.signed_url ??
+    frame.imageUrl ??
+    frame.image_url ??
+    frame.url ??
+    "";
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
   const name = frame.name ?? frame.filename ?? key;
@@ -243,7 +274,7 @@ export const normalizePreviewFrames = (frames: unknown): PreviewFrame[] => {
     return [];
   }
 
-  return frames.map(mapPreviewFrame).filter((frame) => Boolean(frame.signedUrl));
+  return frames.map(mapPreviewFrame);
 };
 
 const normalizeFrameListItems = (frames: unknown): FrameItem[] => {
@@ -467,8 +498,10 @@ export const normalizeJob = (payload: unknown): JobResponse => {
       : (payload as UnknownRecord);
   const data = normalized ?? {};
   const progressSource = data.progress as UnknownRecord | undefined;
-  const rawPlayerRef = data.player_ref ?? data.playerRef ?? null;
-  const playerRef = normalizePlayerRef(rawPlayerRef);
+  const playerRef = data.player_ref ?? data.playerRef ?? null;
+  const inputVideoUrl = data.assets?.inputVideoUrl ?? data.video_url ?? null;
+  const previewFrames = data.preview_frames ?? data.previewFrames ?? [];
+  const normalizedPlayerRef = normalizePlayerRef(playerRef);
   const rawTarget = data.target ?? data.data?.target ?? null;
   const targetSelectionsSource = rawTarget?.selections ?? null;
   const targetSelections = Array.isArray(targetSelectionsSource)
@@ -481,12 +514,40 @@ export const normalizeJob = (payload: unknown): JobResponse => {
           selections: targetSelections
         }
       : null;
+  const resultSource = data.result as UnknownRecord | undefined;
+  const assetsSource = resultSource?.assets ?? {};
+  const mergedAssets = {
+    ...data.assets,
+    ...assetsSource,
+    inputVideoUrl:
+      assetsSource.inputVideoUrl ??
+      assetsSource.input_video_url ??
+      data.assets?.inputVideoUrl ??
+      data.video_url ??
+      null,
+    input_video_url:
+      assetsSource.input_video_url ??
+      assetsSource.inputVideoUrl ??
+      data.assets?.inputVideoUrl ??
+      data.video_url ??
+      null
+  };
+  const shouldIncludeResultAssets = resultSource || data.assets || inputVideoUrl;
+  const result = shouldIncludeResultAssets
+    ? {
+        ...(resultSource ?? {}),
+        assets: mergedAssets
+      }
+    : resultSource;
   const mapped: UnknownRecord = {
     ...data,
     createdAt: data.createdAt ?? data.created_at ?? null,
     updatedAt: data.updatedAt ?? data.updated_at ?? null,
-    playerRef,
+    playerRef: normalizedPlayerRef,
+    playerRefRaw: playerRef,
     target,
+    previewFrames,
+    result,
     progress: progressSource
       ? {
           ...progressSource,

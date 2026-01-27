@@ -395,6 +395,9 @@ export default function JobRunner() {
   const playerSectionRef = useRef<HTMLElement | null>(null);
   const pollStartRef = useRef<number | null>(null);
 
+  const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
+    frame.signedUrl ?? frame.url ?? "";
+
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
   const normalizedStep =
@@ -419,7 +422,12 @@ export default function JobRunner() {
   }, [displayStatus]);
 
   const resolvedPreviewFrames = previewFrames;
+  const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
+    Boolean(resolvePreviewFrameUrl(frame))
+  );
   const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
+  const hasPreviewImages = previewFramesWithImages.length > 0;
+  const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
   const hasFullPreviewSet = resolvedPreviewFrames.length >= REQUIRED_FRAME_COUNT;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
@@ -448,6 +456,8 @@ export default function JobRunner() {
     job?.result?.assets?.input_video_url ??
     job?.result?.assets?.inputVideo?.signedUrl ??
     job?.result?.assets?.input_video?.signedUrl ??
+    (job ? (job as { inputVideoUrl?: string }).inputVideoUrl : null) ??
+    (job ? (job as { video_url?: string }).video_url : null) ??
     null;
   const clipsCount =
     job?.result?.clips?.length ??
@@ -455,6 +465,8 @@ export default function JobRunner() {
     0;
   const radarKeysCount = Object.keys(job?.result?.radar ?? {}).length;
   const previewsReady = hasFullPreviewSet;
+  const isTargetStepReady =
+    normalizedStep === "WAITING_FOR_TARGET" || hasTarget || playerSaved;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
     ? "IDLE"
     : status === "RUNNING" || status === "QUEUED" || status === "PROCESSING"
@@ -531,7 +543,7 @@ export default function JobRunner() {
       candidatePolling ||
       autodetectEnabled);
   const showPlayerSection = effectiveStep === "PLAYER" || canShowPlayerCandidates;
-  const showTargetSection = effectiveStep === "TARGET";
+  const showTargetSection = effectiveStep === "TARGET" || isTargetStepReady;
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
@@ -554,9 +566,10 @@ export default function JobRunner() {
       ? errorDetail
       : "Autodetection coverage is low. Use the manual fallback below.";
   const canShowFrameSelector =
-    (showTargetSection && previewsReady) ||
+    (showTargetSection && previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
     (showManualPlayerFallback &&
-      (previewsReady || (isCandidatesFailed && hasAnyPreviewFrames)));
+      ((previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
+        (isCandidatesFailed && (hasPreviewImages || previewFramesMissingUrls))));
   const isDetectingPlayers =
     (autodetectEnabled || candidatePolling) &&
     !autodetectLowCoverage &&
@@ -599,11 +612,11 @@ export default function JobRunner() {
     : null;
 
   const getPreviewFrameSrc = (frame: PreviewFrame) => {
-    const signedUrl = frame.signedUrl ?? frame.url ?? "";
-    if (!signedUrl) {
+    const frameUrl = resolvePreviewFrameUrl(frame);
+    if (!frameUrl) {
       return "";
     }
-    return `/api/frame-proxy?url=${encodeURIComponent(signedUrl)}`;
+    return `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
   };
 
   const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
@@ -618,7 +631,7 @@ export default function JobRunner() {
     console.error("FRAME_IMG_ERROR", {
       context,
       key: frame.key,
-      url: frame.url ?? frame.signedUrl
+      url: resolvePreviewFrameUrl(frame)
     });
     setPreviewImageErrors((prev) => ({
       ...prev,
@@ -748,6 +761,15 @@ export default function JobRunner() {
       setPreviewPollingActive(false);
     }
   }, [shouldPollFrameList]);
+
+  useEffect(() => {
+    if (
+      previewFrames.length > 0 &&
+      previewFramesWithImages.length === previewFrames.length
+    ) {
+      setPreviewPollingActive(false);
+    }
+  }, [previewFrames.length, previewFramesWithImages.length]);
 
   useEffect(() => {
     if (!jobId) {
@@ -1385,6 +1407,53 @@ export default function JobRunner() {
   };
 
   const handleSelectTargetFromFrames = () => {
+    if (previewFramesWithImages.length === 0) {
+      const rawPlayerRef =
+        (job ? (job as { playerRefRaw?: unknown }).playerRefRaw : null) ??
+        (job ? (job as { player_ref?: unknown }).player_ref : null) ??
+        (job ? (job as { playerRef?: unknown }).playerRef : null) ??
+        null;
+      const rawInputVideoUrl =
+        job?.result?.assets?.inputVideoUrl ??
+        job?.result?.assets?.input_video_url ??
+        (job
+          ? (job as { assets?: { inputVideoUrl?: string } }).assets?.inputVideoUrl
+          : null) ??
+        (job ? (job as { video_url?: string }).video_url : null) ??
+        null;
+      const previewFramesPayload =
+        (job ? (job as { preview_frames?: unknown[] }).preview_frames : null) ??
+        (job ? (job as { previewFrames?: unknown[] }).previewFrames : null) ??
+        job?.previewFrames ??
+        [];
+      const missingFields: string[] = [];
+
+      if (!rawPlayerRef) {
+        missingFields.push("player_ref/playerRef");
+      }
+      if (!rawInputVideoUrl) {
+        missingFields.push("assets.inputVideoUrl/video_url");
+      }
+      if (!Array.isArray(previewFramesPayload) || previewFramesPayload.length === 0) {
+        missingFields.push("preview_frames");
+      }
+      if (
+        Array.isArray(previewFramesPayload) &&
+        previewFramesPayload.length > 0 &&
+        resolvedPreviewFrames.every((frame) => !frame.signedUrl)
+      ) {
+        missingFields.push("signed_url nei frame");
+      }
+
+      console.warn("TARGET_FRAME_PICKER_EMPTY", {
+        missingFields,
+        rawPlayerRef,
+        rawInputVideoUrl,
+        previewFramesCount: Array.isArray(previewFramesPayload)
+          ? previewFramesPayload.length
+          : 0
+      });
+    }
     setGridMode("target");
     playerSectionRef.current?.scrollIntoView({
       behavior: "smooth",
@@ -1553,10 +1622,11 @@ export default function JobRunner() {
               <span>
                 playerRef(raw):{" "}
                 {JSON.stringify(
-                  job?.playerRef ??
+                  (job as any)?.playerRefRaw ??
                     (job as any)?.player_ref ??
-                    job?.result?.playerRef ??
+                    (job as any)?.playerRef ??
                     job?.result?.player_ref ??
+                    job?.result?.playerRef ??
                     null
                 )}
               </span>
@@ -2178,39 +2248,46 @@ export default function JobRunner() {
                       : "Click a preview frame to draw a bounding box around the target."}
                   </p>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {resolvedPreviewFrames.map((frame, index) => (
-                    <button
-                      key={`${frame.key}-${index}`}
-                      type="button"
-                      onClick={() => handleOpenPreview(frame, gridMode)}
-                      className={`group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition ${
-                        gridMode === "target"
-                          ? "hover:border-amber-300/70"
-                          : "hover:border-emerald-400/60"
-                      }`}
-                    >
-                      {previewImageErrors[frame.key] ? (
-                        <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
-                          Image blocked
+                {previewFramesMissingUrls ? (
+                  <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                    Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                    aggiungere signed_url/image_url.
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {previewFramesWithImages.map((frame, index) => (
+                      <button
+                        key={`${frame.key}-${index}`}
+                        type="button"
+                        onClick={() => handleOpenPreview(frame, gridMode)}
+                        className={`group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition ${
+                          gridMode === "target"
+                            ? "hover:border-amber-300/70"
+                            : "hover:border-emerald-400/60"
+                        }`}
+                      >
+                        {previewImageErrors[frame.key] ? (
+                          <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
+                            Image blocked
+                          </div>
+                        ) : (
+                          <img
+                            src={getPreviewFrameSrc(frame)}
+                            alt={formatFrameAlt(frame.timeSec)}
+                            className="h-32 w-full object-cover"
+                            onLoad={() => handlePreviewImageLoad(frame)}
+                            onError={() => handlePreviewImageError(frame, "player-grid")}
+                          />
+                        )}
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
+                            t={formatFrameTime(frame.timeSec)}
+                          </p>
                         </div>
-                      ) : (
-                        <img
-                          src={getPreviewFrameSrc(frame)}
-                          alt={formatFrameAlt(frame.timeSec)}
-                          className="h-32 w-full object-cover"
-                          onLoad={() => handlePreviewImageLoad(frame)}
-                          onError={() => handlePreviewImageError(frame, "player-grid")}
-                        />
-                      )}
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                          t={formatFrameTime(frame.timeSec)}
-                        </p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <p className="text-xs text-slate-500">
                   You will be asked to draw one bounding box in the full-size view.
                 </p>
@@ -2232,6 +2309,15 @@ export default function JobRunner() {
                       Retry preview extraction
                     </button>
                   </>
+                ) : previewFramesMissingUrls ? (
+                  <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                    Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                    aggiungere signed_url/image_url.
+                  </div>
+                ) : hasAnyPreviewFrames ? (
+                  <p className="text-sm text-slate-400">
+                    Preview frames ready. Select target to continue.
+                  </p>
                 ) : isProcessingStatus ? (
                   <div className="space-y-2 text-sm text-slate-400">
                     <div className="flex items-center gap-2">
@@ -2425,7 +2511,7 @@ export default function JobRunner() {
               <button
                 type="button"
                 onClick={handleSelectTargetFromFrames}
-                disabled={!previewsReady}
+                disabled={!hasAnyPreviewFrames}
                 className="rounded-lg border border-amber-300/40 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Select target from frames
