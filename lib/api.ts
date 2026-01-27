@@ -157,6 +157,13 @@ export type TrackCandidate = {
   avgBoxArea?: number | null;
   thumbnailUrl?: string | null;
   tier?: string | null;
+  frameTimeSec?: number | null;
+  frame_time_sec?: number | null;
+  t?: number | null;
+  x?: number | null;
+  y?: number | null;
+  w?: number | null;
+  h?: number | null;
 };
 
 export type TrackCandidatesResponse = {
@@ -335,6 +342,26 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.bucket ??
     candidate.segment ??
     null;
+  const bboxSource =
+    candidate.bbox_xywh ??
+    candidate.bbox ??
+    candidate.box ??
+    candidate.bounding_box ??
+    candidate.boundingBox ??
+    null;
+  const frameTimeSec = coerceNumber(
+    candidate.frameTimeSec ??
+      candidate.frame_time_sec ??
+      candidate.time_sec ??
+      candidate.timeSec ??
+      candidate.t ??
+      candidate.sample_time_sec ??
+      candidate.sampleTimeSec
+  );
+  const x = coerceNumber(bboxSource?.x ?? candidate.x);
+  const y = coerceNumber(bboxSource?.y ?? candidate.y);
+  const w = coerceNumber(bboxSource?.w ?? candidate.w);
+  const h = coerceNumber(bboxSource?.h ?? candidate.h);
 
   return {
     trackId,
@@ -342,7 +369,14 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     stability,
     avgBoxArea,
     thumbnailUrl,
-    tier
+    tier,
+    frameTimeSec,
+    frame_time_sec: frameTimeSec,
+    t: frameTimeSec,
+    x,
+    y,
+    w,
+    h
   };
 };
 
@@ -731,12 +765,35 @@ export async function getJobTrackCandidates(
   return normalizeTrackCandidates(payload);
 }
 
-export async function selectJobTrack(jobId: string, trackId: string) {
+export async function selectJobTrack(jobId: string, candidate: TrackCandidate) {
+  const frameTimeSec = candidate.frameTimeSec ?? candidate.frame_time_sec ?? candidate.t ?? null;
+  const { x, y, w, h } = candidate;
+  if (
+    frameTimeSec === null ||
+    frameTimeSec === undefined ||
+    x === null ||
+    x === undefined ||
+    y === null ||
+    y === undefined ||
+    w === null ||
+    w === undefined ||
+    h === null ||
+    h === undefined
+  ) {
+    throw new Error("Missing selection data for track candidate.");
+  }
+  const requestPayload = {
+    frame_time_sec: frameTimeSec,
+    x,
+    y,
+    w,
+    h
+  };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/select-track`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",
-    body: JSON.stringify({ track_id: trackId, trackId })
+    body: JSON.stringify(requestPayload)
   });
 
   if (!response.ok) {
