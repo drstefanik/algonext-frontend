@@ -142,6 +142,7 @@ export type TargetSelection = {
   frame_time_sec?: number | null;
   frame_key?: string | null;
   frameKey?: string | null;
+  t?: number | null;
   x: number;
   y: number;
   w: number;
@@ -331,8 +332,14 @@ const mapTargetSelection = (selection: UnknownRecord): TargetSelection => {
       selection.time_sec ??
       selection.timeSec
   );
+  const frameKey =
+    selection.frameKey ?? selection.frame_key ?? selection.key ?? null;
   return {
     frameTimeSec,
+    frame_time_sec: frameTimeSec,
+    frameKey,
+    frame_key: frameKey,
+    t: frameTimeSec ?? selection.t ?? null,
     x: selection.x ?? 0,
     y: selection.y ?? 0,
     w: selection.w ?? 0,
@@ -810,8 +817,10 @@ export async function saveJobTargetSelection(
 ) {
   const selections = payload.selections.map((selection) => {
     const frameTimeSec = selection.frameTimeSec ?? selection.frame_time_sec ?? null;
+    const frameKey = selection.frameKey ?? selection.frame_key ?? null;
     return {
       frame_time_sec: frameTimeSec,
+      ...(frameKey ? { frame_key: frameKey } : {}),
       x: selection.x,
       y: selection.y,
       w: selection.w,
