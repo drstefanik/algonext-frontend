@@ -146,6 +146,7 @@ export type TrackCandidate = {
   stability?: number | null;
   avgBoxArea?: number | null;
   thumbnailUrl?: string | null;
+  tier?: string | null;
 };
 
 type UnknownRecord = Record<string, any>;
@@ -311,13 +312,22 @@ const mapTrackCandidate = (candidate: UnknownRecord): TrackCandidate => {
     candidate.imageUrl ??
     candidate.image_url ??
     null;
+  const tier =
+    candidate.tier ??
+    candidate.group ??
+    candidate.section ??
+    candidate.category ??
+    candidate.bucket ??
+    candidate.segment ??
+    null;
 
   return {
     trackId,
     coverage,
     stability,
     avgBoxArea,
-    thumbnailUrl
+    thumbnailUrl,
+    tier
   };
 };
 
