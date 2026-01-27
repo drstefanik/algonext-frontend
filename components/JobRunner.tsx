@@ -1033,15 +1033,15 @@ export default function JobRunner() {
     }
   };
 
-  const handleSelectTrack = async (trackId: string) => {
+  const handleSelectTrack = async (candidate: TrackCandidate) => {
     if (!jobId) {
       return;
     }
     setPlayerCandidateError(null);
-    setSelectingTrackId(trackId);
+    setSelectingTrackId(candidate.trackId);
     try {
-      await selectJobTrack(jobId, trackId);
-      setSelectedTrackId(trackId);
+      await selectJobTrack(jobId, candidate);
+      setSelectedTrackId(candidate.trackId);
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
     } catch (selectError) {
@@ -1657,7 +1657,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      onClick={() => handleSelectTrack(candidate)}
                                       disabled={isSelecting || isSelected}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -1771,7 +1771,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      onClick={() => handleSelectTrack(candidate)}
                                       disabled={isSelecting || isSelected}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -1885,7 +1885,7 @@ export default function JobRunner() {
                                     <button
                                       key={candidate.trackId}
                                       type="button"
-                                      onClick={() => handleSelectTrack(candidate.trackId)}
+                                      onClick={() => handleSelectTrack(candidate)}
                                       disabled={isSelecting || isSelected}
                                       aria-pressed={isSelected}
                                       className={`overflow-hidden rounded-xl border text-left transition ${
@@ -1999,7 +1999,7 @@ export default function JobRunner() {
                                 <button
                                   key={candidate.trackId}
                                   type="button"
-                                  onClick={() => handleSelectTrack(candidate.trackId)}
+                                  onClick={() => handleSelectTrack(candidate)}
                                   disabled={isSelecting || isSelected}
                                   aria-pressed={isSelected}
                                   className={`overflow-hidden rounded-xl border text-left transition ${
