@@ -427,9 +427,11 @@ export default function JobRunner() {
     ? "IDLE"
     : status === "RUNNING" || status === "QUEUED"
       ? "PROCESSING"
-      : previewsReady && hasPlayer && !hasTarget
-        ? "TARGET"
-        : "PROCESSING";
+      : previewsReady && !hasPlayer
+        ? "PLAYER"
+        : previewsReady && hasPlayer && !hasTarget
+          ? "TARGET"
+          : "PROCESSING";
   const rawAutodetectionStatus =
     typeof job?.autodetection_status === "string"
       ? job.autodetection_status
