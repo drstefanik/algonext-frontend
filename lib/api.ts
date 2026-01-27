@@ -34,6 +34,10 @@ export type JobProgress = {
   updatedAt?: string;
   autodetection_status?: string;
   autodetectionStatus?: string;
+  totalTracks?: number;
+  total_tracks?: number;
+  error_detail?: string;
+  errorDetail?: string;
 };
 
 export type JobResultSummary = {
@@ -97,6 +101,8 @@ export type JobResponse = {
   progress?: JobProgress;
   autodetection_status?: string;
   autodetectionStatus?: string;
+  error_detail?: string;
+  errorDetail?: string;
   previewFrames?: PreviewFrame[];
   result?: JobResult;
   playerRef?: FrameSelection;
