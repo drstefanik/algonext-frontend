@@ -373,6 +373,8 @@ export default function JobRunner() {
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
+  const normalizedStep =
+    typeof step === "string" ? step.trim().toUpperCase() : null;
   const displayStatus = job?.status ?? "WAITING";
   const displayStatusLabelMap: Record<string, string> = {
     WAITING_FOR_PLAYER: "Select player",
@@ -393,10 +395,11 @@ export default function JobRunner() {
   }, [displayStatus]);
 
   const resolvedPreviewFrames = previewFrames;
+  const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
   const hasFullPreviewSet = resolvedPreviewFrames.length >= REQUIRED_FRAME_COUNT;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
-    resolvedPreviewFrames.length > 0 && previewImageErrorCount > 0;
+    hasAnyPreviewFrames && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
   const hasPlayer = Boolean(job?.playerRef || selectedTrackId);
@@ -406,6 +409,7 @@ export default function JobRunner() {
   const normalizedStatus = typeof status === "string" ? status.toUpperCase() : null;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
+  const isCandidatesFailed = normalizedStep === "CANDIDATES_FAILED";
   const warningsPayload =
     job?.result?.warnings ??
     job?.warnings ??
@@ -471,6 +475,7 @@ export default function JobRunner() {
     Boolean(jobId) &&
     !hasPlayer &&
     (previewsReady ||
+      (isCandidatesFailed && hasAnyPreviewFrames) ||
       trackCandidates.length > 0 ||
       loadingTrackCandidates ||
       candidatePolling ||
@@ -489,10 +494,14 @@ export default function JobRunner() {
   const frameSelectorKey = jobId ?? "frame-selector";
   const showManualPlayerFallback =
     showPlayerSection &&
-    previewsReady &&
+    (previewsReady || isCandidatesFailed) &&
     !selectedTrackId &&
-    isLowCoverageStatus &&
-    framesProcessedCount >= MIN_FRAMES;
+    ((isLowCoverageStatus && framesProcessedCount >= MIN_FRAMES) ||
+      isCandidatesFailed);
+  const canShowFrameSelector =
+    (showTargetSection && previewsReady) ||
+    (showManualPlayerFallback &&
+      (previewsReady || (isCandidatesFailed && hasAnyPreviewFrames)));
   const isDetectingPlayers =
     (autodetectEnabled || candidatePolling) &&
     !autodetectLowCoverage &&
@@ -1022,7 +1031,7 @@ export default function JobRunner() {
       setError("Select player first.");
       return;
     }
-    if (!hasFullPreviewSet) {
+    if (!hasFullPreviewSet && !(isCandidatesFailed && hasAnyPreviewFrames)) {
       setError("Wait for 8/8 preview frames.");
       return;
     }
@@ -1234,6 +1243,11 @@ export default function JobRunner() {
   const handleRetryPreviewPolling = () => {
     setPreviewPollingError(null);
     setPreviewPollingAttempt((prev) => prev + 1);
+  };
+
+  const handleRetryPreviewExtraction = () => {
+    handleRetryPreviewPolling();
+    handleRefreshJob();
   };
 
   const handleFocusStep = () => {
@@ -1912,7 +1926,7 @@ export default function JobRunner() {
             </div>
           ) : null}
           {jobId ? (
-            previewsReady && (showTargetSection || showManualPlayerFallback) ? (
+            canShowFrameSelector ? (
               <FrameSelector key={frameSelectorKey}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-sm text-slate-400">
@@ -1962,12 +1976,28 @@ export default function JobRunner() {
               <div className="space-y-3 text-sm text-slate-400">
                 {playerRef ? (
                   <p>Player reference already saved.</p>
+                ) : isCandidatesFailed && !hasAnyPreviewFrames ? (
+                  <>
+                    <p className="text-sm text-rose-200">
+                      Preview frames not available.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleRetryPreviewExtraction}
+                      className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200"
+                    >
+                      Retry preview extraction
+                    </button>
+                  </>
                 ) : isProcessingStatus ? (
-                  <div className="flex items-center gap-2 text-sm text-slate-400">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                    <span>
-                      {`Detecting players… (${framesProcessedCount} frames processed)`}
-                    </span>
+                  <div className="space-y-2 text-sm text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                      <span>Waiting for previews / tracking candidates…</span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {`${framesProcessedCount} frames processed`}
+                    </p>
                   </div>
                 ) : (
                   <>
