@@ -5,6 +5,7 @@ type OverlayFramesGalleryProps = {
   getFrameSrc: (frame: PreviewFrame) => string;
   selectedTrackId?: string | null;
   disabled?: boolean;
+  overlayReady?: boolean;
   onPick: (trackId: string, frameKey: string) => void;
 };
 
@@ -57,12 +58,13 @@ export default function OverlayFramesGallery({
   getFrameSrc,
   selectedTrackId,
   disabled,
+  overlayReady = true,
   onPick
 }: OverlayFramesGalleryProps) {
   if (frames.length === 0) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
-        No preview frames available yet.
+        {overlayReady ? "No preview frames available yet." : "Calcolo giocatori in corso…"}
       </div>
     );
   }
@@ -72,6 +74,7 @@ export default function OverlayFramesGallery({
       {frames.map((frame, index) => {
         const frameSrc = getFrameSrc(frame);
         const tracks = frame.tracks ?? [];
+        const showTrackCount = overlayReady;
         return (
           <div
             key={`${frame.key}-${index}`}
@@ -134,7 +137,17 @@ export default function OverlayFramesGallery({
               <span className="uppercase tracking-[0.2em] text-slate-500">
                 t={formatFrameTime(frame.timeSec)}
               </span>
-              <span>{tracks.length} tracks</span>
+              {showTrackCount ? (
+                tracks.length > 0 ? (
+                  <span>{tracks.length} tracks</span>
+                ) : (
+                  <span title="Nessun giocatore rilevato in questo frame">
+                    Nessun giocatore
+                  </span>
+                )
+              ) : (
+                <span>Calcolo in corso…</span>
+              )}
             </div>
           </div>
         );
