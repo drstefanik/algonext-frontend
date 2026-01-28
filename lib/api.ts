@@ -880,11 +880,19 @@ export async function enqueueJob(jobId: string) {
   return normalizeJob(payload);
 }
 
-export async function getJob(jobId: string) {
-  const response = await fetchWithTimeout(`/api/jobs/${jobId}`, {
-    method: "GET",
-    cache: "no-store"
-  });
+export async function getJob(jobId: string, trackId?: string | null) {
+  const searchParams = new URLSearchParams();
+  if (trackId) {
+    searchParams.set("track_id", trackId);
+  }
+  const query = searchParams.toString();
+  const response = await fetchWithTimeout(
+    `/api/jobs/${jobId}${query ? `?${query}` : ""}`,
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
 
   if (!response.ok) {
     await handleError(response);
@@ -894,6 +902,28 @@ export async function getJob(jobId: string) {
   const mapped = normalizeJob(payload);
   console.log("Mapped job response", mapped);
   return mapped;
+}
+
+export async function getJobOverlayFrames(jobId: string) {
+  const response = await fetchWithTimeout(
+    `/api/jobs/${encodeURIComponent(jobId)}/frames/overlay?ts=${Date.now()}`,
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
+    await response.json().catch(() => null)
+  );
+  const framesSource = Array.isArray(payload)
+    ? payload
+    : payload?.frames ?? payload?.items ?? payload?.preview_frames ?? [];
+  return normalizePreviewFrames(framesSource);
 }
 
 export async function getJobStatus(jobId: string) {
@@ -1024,6 +1054,31 @@ export async function pickJobPlayer(
     track_id: payload.trackId
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/pick-player`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify(requestPayload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  const responsePayload = unwrap<UnknownRecord | null>(
+    await response.json().catch(() => null)
+  );
+  return responsePayload;
+}
+
+export async function analyzeJobPlayer(
+  jobId: string,
+  payload: { frameKey: string; trackId: string }
+) {
+  const requestPayload = {
+    frame_key: payload.frameKey,
+    track_id: payload.trackId
+  };
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/analyze-player`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",

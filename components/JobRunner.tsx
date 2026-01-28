@@ -13,9 +13,11 @@ import {
   createJob,
   enqueueJob,
   getJob,
+  getJobOverlayFrames,
   getJobTrackCandidates,
   listJobFrames,
   normalizeJob,
+  analyzeJobPlayer,
   pickJobPlayer,
   saveJobPlayerRef,
   saveJobTargetSelection,
@@ -31,6 +33,7 @@ import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 import { extractWarnings } from "@/lib/warnings";
 import PlayerPicker from "@/components/PlayerPicker";
+import OverlayFramesGallery from "@/components/OverlayFramesGallery";
 import {
   clampNormalized,
   coerceNumber,
@@ -442,6 +445,9 @@ export default function JobRunner() {
     useState<TargetAdjustState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
+  const [overlayFrames, setOverlayFrames] = useState<PreviewFrame[]>([]);
+  const [overlayFramesLoading, setOverlayFramesLoading] = useState(false);
+  const [overlayFramesError, setOverlayFramesError] = useState<string | null>(null);
   const [framesFrozen, setFramesFrozen] = useState(false);
   const [previewPollingError, setPreviewPollingError] = useState<string | null>(
     null
@@ -458,7 +464,15 @@ export default function JobRunner() {
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const playerSectionRef = useRef<HTMLElement | null>(null);
+  const analysisSectionRef = useRef<HTMLElement | null>(null);
   const pollStartRef = useRef<number | null>(null);
+
+  const [analysisTrackId, setAnalysisTrackId] = useState<string | null>(null);
+  const [analysisFrameKey, setAnalysisFrameKey] = useState<string | null>(null);
+  const [analysisJob, setAnalysisJob] = useState<JobResponse | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisPolling, setAnalysisPolling] = useState(false);
+  const [analysisRequesting, setAnalysisRequesting] = useState(false);
 
   const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
     frame.signedUrl ?? frame.url ?? "";
@@ -486,6 +500,22 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
+  const analysisStatus = analysisJob?.status ?? null;
+  const analysisProgressPct = analysisJob?.progress?.pct ?? 0;
+  const analysisStep = analysisJob?.progress?.step ?? "—";
+  const analysisMessage = analysisJob?.progress?.message ?? null;
+  const analysisNormalizedStatus =
+    typeof analysisStatus === "string" ? analysisStatus.toUpperCase() : null;
+  const analysisIsFinal =
+    analysisNormalizedStatus === "COMPLETED" ||
+    analysisNormalizedStatus === "PARTIAL" ||
+    analysisNormalizedStatus === "FAILED";
+  const analysisIsRunning =
+    analysisRequesting ||
+    analysisPolling ||
+    analysisNormalizedStatus === "RUNNING" ||
+    analysisNormalizedStatus === "PROCESSING";
+
   const jobPreviewFrames = job?.previewFrames ?? [];
   const resolvedPreviewFrames =
     previewFrames.length > 0
@@ -497,6 +527,8 @@ export default function JobRunner() {
           return match?.tracks ? { ...frame, tracks: match.tracks } : frame;
         })
       : jobPreviewFrames;
+  const overlayGalleryFrames =
+    overlayFrames.length > 0 ? overlayFrames : resolvedPreviewFrames;
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -1007,6 +1039,41 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
+    if (!jobId) {
+      setOverlayFrames([]);
+      setOverlayFramesError(null);
+      setOverlayFramesLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchOverlayFrames = async () => {
+      setOverlayFramesLoading(true);
+      try {
+        const frames = await getJobOverlayFrames(jobId);
+        if (isMounted) {
+          setOverlayFrames(frames);
+          setOverlayFramesError(null);
+        }
+      } catch (fetchError) {
+        if (isMounted) {
+          setOverlayFramesError(toErrorMessage(fetchError));
+        }
+      } finally {
+        if (isMounted) {
+          setOverlayFramesLoading(false);
+        }
+      }
+    };
+
+    fetchOverlayFrames();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [jobId]);
+
+  useEffect(() => {
     const draftSelection = jobTargetDraft ?? jobTargetSelection ?? null;
     if (draftSelection) {
       setTargetSelection(draftSelection);
@@ -1083,6 +1150,15 @@ export default function JobRunner() {
       setSelectingTrackId(null);
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
+      setOverlayFrames([]);
+      setOverlayFramesError(null);
+      setOverlayFramesLoading(false);
+      setAnalysisTrackId(null);
+      setAnalysisFrameKey(null);
+      setAnalysisJob(null);
+      setAnalysisError(null);
+      setAnalysisPolling(false);
+      setAnalysisRequesting(false);
       previewListRequestRef.current = 0;
       pollStartRef.current = null;
       setPollingTimedOut(false);
@@ -1095,6 +1171,47 @@ export default function JobRunner() {
       setFramesFrozen(false);
     }
   }, [jobId]);
+
+  useEffect(() => {
+    if (!jobId || !analysisTrackId || analysisRequesting || analysisError) {
+      return;
+    }
+
+    let isMounted = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const pollAnalysis = async () => {
+      try {
+        const updated = await getJob(jobId, analysisTrackId);
+        if (!isMounted) {
+          return;
+        }
+        setAnalysisJob(updated);
+        const status = (updated.status ?? "").toString().toUpperCase();
+        if (["COMPLETED", "PARTIAL", "FAILED"].includes(status)) {
+          setAnalysisPolling(false);
+          return;
+        }
+        timeoutId = setTimeout(pollAnalysis, 3000);
+      } catch (pollError) {
+        if (!isMounted) {
+          return;
+        }
+        setAnalysisError(toErrorMessage(pollError));
+        setAnalysisPolling(false);
+      }
+    };
+
+    setAnalysisPolling(true);
+    pollAnalysis();
+
+    return () => {
+      isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [jobId, analysisTrackId, analysisError, analysisRequesting]);
 
   useEffect(() => {
     if (showTargetSection) {
@@ -1409,6 +1526,28 @@ export default function JobRunner() {
     }
     setSelectionWarning(warning ?? null);
     handleOpenPreview(resolvedTargetFrame, "target");
+  };
+
+  const handleAnalyzeTrack = async (trackId: string, frameKey: string) => {
+    if (!jobId) {
+      return;
+    }
+    setAnalysisError(null);
+    setAnalysisRequesting(true);
+    setAnalysisTrackId(trackId);
+    setAnalysisFrameKey(frameKey);
+    setAnalysisJob(null);
+    setAnalysisPolling(false);
+    analysisSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    try {
+      await analyzeJobPlayer(jobId, { trackId, frameKey });
+      setAnalysisRequesting(false);
+    } catch (analysisStartError) {
+      setAnalysisError(toErrorMessage(analysisStartError));
+      setAnalysisRequesting(false);
+      setAnalysisPolling(false);
+    }
   };
 
   const handlePickPlayer = async (trackId: string, frameKey: string | null) => {
@@ -2176,6 +2315,43 @@ export default function JobRunner() {
 
               {showPlayerSection ? (
                 <div className="mt-4 space-y-4">
+                  <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                          Overlay frames gallery
+                        </p>
+                        <p className="mt-1 text-sm text-slate-200">
+                          Click a bounding box to start the player analysis.
+                        </p>
+                      </div>
+                      {analysisTrackId ? (
+                        <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                          Track #{analysisTrackId}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {overlayFramesLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-slate-400">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                        <span>Loading overlay frames...</span>
+                      </div>
+                    ) : overlayFramesError ? (
+                      <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                        {overlayFramesError}
+                      </div>
+                    ) : (
+                      <OverlayFramesGallery
+                        frames={overlayGalleryFrames}
+                        getFrameSrc={getPreviewFrameSrc}
+                        selectedTrackId={analysisTrackId}
+                        disabled={analysisRequesting}
+                        onPick={handleAnalyzeTrack}
+                      />
+                    )}
+                  </div>
+
                   {pickerFrame && (pickerFrame.tracks ?? []).length > 0 ? (
                     <PlayerPicker
                       frame={pickerFrame}
@@ -3060,6 +3236,88 @@ export default function JobRunner() {
               <p>Create a job to load preview frames.</p>
             </div>
           )}
+        </div>
+      </section>
+
+      <section
+        ref={analysisSectionRef}
+        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Analysis</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Monitor the selected player analysis and results.
+            </p>
+          </div>
+          {analysisTrackId ? (
+            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-300">
+              Track #{analysisTrackId}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-6 space-y-4">
+          {!analysisTrackId ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+              Click a bounding box in the overlay frames to start analyzing a
+              player.
+            </div>
+          ) : null}
+
+          {analysisTrackId ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Status
+                  </p>
+                  <p className="mt-1 text-sm text-slate-200">
+                    {analysisRequesting
+                      ? "Starting analysis..."
+                      : analysisStatus ?? "Waiting"}
+                  </p>
+                </div>
+                {analysisFrameKey ? (
+                  <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-400">
+                    Frame {analysisFrameKey}
+                  </span>
+                ) : null}
+              </div>
+
+              {analysisIsRunning ? (
+                <div className="mt-4 space-y-3">
+                  <ProgressBar pct={analysisProgressPct} />
+                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Step
+                    </p>
+                    <p className="mt-2">{analysisStep}</p>
+                    {analysisMessage ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        {analysisMessage}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {analysisError ? (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+              {analysisError}
+            </div>
+          ) : null}
+
+          {analysisIsFinal && analysisJob?.result ? (
+            <ResultView job={analysisJob} />
+          ) : null}
+          {analysisIsFinal && analysisJob && !analysisJob.result ? (
+            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+              Analysis completed but no result payload was returned.
+            </div>
+          ) : null}
         </div>
       </section>
 

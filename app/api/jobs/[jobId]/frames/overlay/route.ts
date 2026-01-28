@@ -20,7 +20,6 @@ export async function GET(request: Request, { params }: RouteContext) {
   }
 
   const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}${search}`;
-
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames/overlay${search}`;
   return forward(request, url, { methodOverride: "GET", includeBody: false });
 }

@@ -10,7 +10,7 @@ type RouteContext = {
   };
 };
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function POST(request: Request, { params }: RouteContext) {
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return Response.json(
@@ -19,8 +19,6 @@ export async function GET(request: Request, { params }: RouteContext) {
     );
   }
 
-  const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}${search}`;
-
-  return forward(request, url, { methodOverride: "GET", includeBody: false });
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/analyze-player`;
+  return forward(request, url);
 }
