@@ -35,6 +35,7 @@ import ResultView from "@/components/ResultView";
 import { extractWarnings } from "@/lib/warnings";
 import PlayerPicker from "@/components/PlayerPicker";
 import OverlayFramesGallery from "@/components/OverlayFramesGallery";
+import { normalizeFrameUrl } from "@/lib/frameUrl";
 import {
   clampNormalized,
   coerceNumber,
@@ -980,7 +981,7 @@ export default function JobRunner() {
   };
 
   const getPreviewFrameSrc = (frame: PreviewFrame) => {
-    const frameUrl = resolvePreviewFrameUrl(frame);
+    const frameUrl = normalizeFrameUrl(resolvePreviewFrameUrl(frame));
     if (!frameUrl) {
       return "";
     }
@@ -997,7 +998,7 @@ export default function JobRunner() {
     : "";
 
   const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
-    const thumbnailUrl = candidate.thumbnailUrl ?? "";
+    const thumbnailUrl = normalizeFrameUrl(candidate.thumbnailUrl ?? "");
     if (!thumbnailUrl) {
       return "";
     }
@@ -1005,10 +1006,11 @@ export default function JobRunner() {
   };
 
   const getCandidateSampleFrameSrc = (frameUrl: string | null | undefined) => {
-    if (!frameUrl) {
+    const normalizedFrameUrl = normalizeFrameUrl(frameUrl ?? "");
+    if (!normalizedFrameUrl) {
       return "";
     }
-    return `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
+    return `/api/frame-proxy?url=${encodeURIComponent(normalizedFrameUrl)}`;
   };
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {

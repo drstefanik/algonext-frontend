@@ -4,6 +4,7 @@ const jsonHeaders = {
   "Content-Type": "application/json",
   "Cache-Control": "no-store"
 };
+const ALLOWED_FRAME_URL_PREFIX = "https://s3.nextgroupintl.com/";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -26,10 +27,38 @@ export async function GET(request: Request) {
     });
   }
 
+  if (!target.toString().startsWith(ALLOWED_FRAME_URL_PREFIX)) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "INVALID_FRAME_URL" }),
+      {
+        status: 400,
+        headers: jsonHeaders
+      }
+    );
+  }
+
+  const passthroughHeaders = new Headers();
+  const passthroughHeaderNames = [
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "if-modified-since",
+    "if-none-match",
+    "range",
+    "user-agent"
+  ];
+  for (const name of passthroughHeaderNames) {
+    const value = request.headers.get(name);
+    if (value) {
+      passthroughHeaders.set(name, value);
+    }
+  }
+
   try {
     const upstream = await fetch(target.toString(), {
       method: "GET",
-      cache: "no-store"
+      cache: "no-store",
+      headers: passthroughHeaders
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -42,13 +71,9 @@ export async function GET(request: Request) {
       );
     }
 
-    const headers = new Headers();
-    headers.set("Content-Type", "image/jpeg");
-    headers.set("Cache-Control", "no-store");
-
     return new Response(upstream.body, {
       status: upstream.status,
-      headers
+      headers: upstream.headers
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
