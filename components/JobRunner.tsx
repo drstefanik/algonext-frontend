@@ -25,6 +25,7 @@ import {
   type FrameSelection,
   type JobResponse,
   type PreviewFrame,
+  type PreviewFrameTrack,
   type TrackCandidate,
   type TrackCandidateSampleFrame,
   type TargetSelection
@@ -50,6 +51,41 @@ const MIN_FRAMES = REQUIRED_FRAME_COUNT;
 const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
 
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const isBboxOutOfBounds = (bbox: { x: number; y: number; w: number; h: number }) =>
+  bbox.x < 0 || bbox.y < 0 || bbox.w <= 0 || bbox.h <= 0 || bbox.x + bbox.w > 1 || bbox.y + bbox.h > 1;
+
+const isBboxTooSmallOrLarge = (bbox: { x: number; y: number; w: number; h: number }) => {
+  const minSize = 0.02;
+  const maxSize = 0.98;
+  return bbox.w < minSize || bbox.h < minSize || bbox.w > maxSize || bbox.h > maxSize;
+};
+
+const calculateIoU = (
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number }
+) => {
+  const ax2 = a.x + a.w;
+  const ay2 = a.y + a.h;
+  const bx2 = b.x + b.w;
+  const by2 = b.y + b.h;
+  const interLeft = Math.max(a.x, b.x);
+  const interTop = Math.max(a.y, b.y);
+  const interRight = Math.min(ax2, bx2);
+  const interBottom = Math.min(ay2, by2);
+  const interWidth = Math.max(0, interRight - interLeft);
+  const interHeight = Math.max(0, interBottom - interTop);
+  const interArea = interWidth * interHeight;
+  if (interArea <= 0) {
+    return 0;
+  }
+  const areaA = a.w * a.h;
+  const areaB = b.w * b.h;
+  return interArea / (areaA + areaB - interArea);
+};
 
 const formatFrameTime = (timeSec: number | null) =>
   timeSec === null ? "—" : `${timeSec.toFixed(2)}s`;
@@ -159,16 +195,68 @@ const normalizeTargetSelection = (source: unknown): TargetSelection | null => {
   if (!bbox) {
     return null;
   }
+  const record = source as Record<string, unknown>;
+  const trackId =
+    typeof record.trackId === "string"
+      ? record.trackId
+      : typeof record.track_id === "string"
+      ? record.track_id
+      : null;
   return {
     frameTimeSec: timeSec,
     frame_time_sec: timeSec,
     frameKey: frameKey ?? null,
     frame_key: frameKey ?? null,
+    trackId,
+    track_id: trackId,
     t: timeSec ?? null,
     x: bbox.x,
     y: bbox.y,
     w: bbox.w,
     h: bbox.h
+  };
+};
+
+const getTrackBBox = (track: PreviewFrameTrack | null | undefined) => {
+  if (!track) {
+    return null;
+  }
+  if (
+    !isFiniteNumber(track.x) ||
+    !isFiniteNumber(track.y) ||
+    !isFiniteNumber(track.w) ||
+    !isFiniteNumber(track.h)
+  ) {
+    return null;
+  }
+  return {
+    x: track.x,
+    y: track.y,
+    w: track.w,
+    h: track.h
+  };
+};
+
+const buildTargetSelectionFromTrack = (
+  frame: PreviewFrame,
+  track: PreviewFrameTrack
+): TargetSelection | null => {
+  const bbox = getTrackBBox(track);
+  if (!bbox) {
+    return null;
+  }
+  return {
+    frameTimeSec: frame.timeSec ?? null,
+    frame_time_sec: frame.timeSec ?? null,
+    frameKey: frame.key,
+    frame_key: frame.key,
+    trackId: track.trackId,
+    track_id: track.trackId,
+    t: frame.timeSec ?? null,
+    x: clampNormalized(bbox.x),
+    y: clampNormalized(bbox.y),
+    w: clampNormalized(bbox.w),
+    h: clampNormalized(bbox.h)
   };
 };
 
@@ -405,6 +493,7 @@ export default function JobRunner() {
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
+  const [selectionRequestId, setSelectionRequestId] = useState<string | null>(null);
   const [targetMismatchOpen, setTargetMismatchOpen] = useState(false);
   const [targetMismatchAllowForce, setTargetMismatchAllowForce] = useState(false);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
@@ -851,7 +940,7 @@ export default function JobRunner() {
     if (!selectionKey) {
       return {
         frame: null,
-        warning: "Frame_key mancante nel target. Impossibile aprire il frame."
+        warning: "Seleziona un frame dove il giocatore è visibile."
       };
     }
     const frame =
@@ -1672,6 +1761,7 @@ export default function JobRunner() {
     setSelectionError(null);
     setSelectionSuccess(null);
     setSelectionWarning(null);
+    setSelectionRequestId(null);
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
@@ -1700,14 +1790,43 @@ export default function JobRunner() {
         status?: number;
         code?: string;
         allowForce?: boolean;
+        requestId?: string;
       };
+      const errorCode = error?.code ?? null;
+      if (errorCode === "INVALID_PAYLOAD") {
+        console.error("TARGET_SELECTION_PAYLOAD_INVALID", saveError);
+        setSelectionError("Errore interno UI: payload incompleto");
+        return;
+      }
+      if (errorCode === "INVALID_FRAME_KEY") {
+        setSelectionError("Frame non valido, ricarica overlay");
+        setDraftTargetSelection(null);
+        return;
+      }
+      if (errorCode === "TRACK_NOT_IN_FRAME") {
+        setSelectionError(
+          "Il giocatore selezionato non è visibile in questo frame"
+        );
+        setDraftTargetSelection(null);
+        return;
+      }
       if (
         error?.status === 409 &&
-        (error?.code === "TARGET_MISMATCH" ||
+        (errorCode === "TARGET_MISMATCH" ||
           error.message.toUpperCase().includes("TARGET_MISMATCH"))
       ) {
         setTargetMismatchAllowForce(Boolean(error.allowForce));
         setTargetMismatchOpen(true);
+        return;
+      }
+      if (errorCode === "TARGET_MISMATCH") {
+        setTargetMismatchAllowForce(Boolean(error.allowForce));
+        setTargetMismatchOpen(true);
+        return;
+      }
+      if (errorCode === "INTERNAL_ERROR") {
+        setSelectionError("Errore interno del server");
+        setSelectionRequestId(error.requestId ?? null);
         return;
       }
       setSelectionError(toErrorMessage(saveError));
@@ -1729,6 +1848,27 @@ export default function JobRunner() {
       setError("Wait for 8/8 preview frames.");
       return;
     }
+    if (mode === "target") {
+      const overlayFrame =
+        overlayFrames.find((candidate) => candidate.key === frame.key) ?? null;
+      const track =
+        overlayFrame?.tracks?.find((candidate) => candidate.trackId === selectedTrackId) ??
+        null;
+      if (!track) {
+        setSelectionError(
+          "Selected player not present in this frame. Pick another frame."
+        );
+        return;
+      }
+      const selection = buildTargetSelectionFromTrack(frame, track);
+      if (!selection) {
+        setSelectionError(
+          "Selected player not present in this frame. Pick another frame."
+        );
+        return;
+      }
+      setDraftTargetSelection(selection);
+    }
     setPreviewMode(mode);
     setFramesFrozen(true);
     setSelectedPreviewFrame(frame);
@@ -1740,12 +1880,6 @@ export default function JobRunner() {
       setSelectionError(null);
       setSelectionSuccess(null);
       setSelectionWarning(null);
-      const existingSelection = draftTargetSelection ?? targetSelection;
-      if (existingSelection && selectionMatchesFrame(existingSelection, frame)) {
-        setDraftTargetSelection(existingSelection);
-      } else {
-        setDraftTargetSelection(null);
-      }
     }
   };
 
@@ -1936,6 +2070,8 @@ export default function JobRunner() {
           frameTimeSec: selectedPreviewFrame.timeSec,
           frameKey: selectedPreviewFrame.key,
           frame_key: selectedPreviewFrame.key,
+          trackId: selectedTrackId ?? null,
+          track_id: selectedTrackId ?? null,
           x: normalized.x,
           y: normalized.y,
           w: normalized.w,
@@ -2170,6 +2306,49 @@ export default function JobRunner() {
 
   const playerRefMissingTime = playerRefSelection?.frameTimeSec == null;
   const targetMissingTime = getSelectionTimeSec(draftTargetSelection) == null;
+  const targetMissingFrameKey = Boolean(
+    draftTargetSelection && !getSelectionFrameKey(draftTargetSelection)
+  );
+  const targetMissingTrackId = Boolean(
+    draftTargetSelection && !(draftTargetSelection.trackId ?? draftTargetSelection.track_id)
+  );
+  const targetSelectionFrameKey =
+    getSelectionFrameKey(draftTargetSelection) ?? selectedPreviewFrame?.key ?? null;
+  const targetOverlayFrame = useMemo(() => {
+    if (!targetSelectionFrameKey) {
+      return null;
+    }
+    return overlayFrames.find((frame) => frame.key === targetSelectionFrameKey) ?? null;
+  }, [overlayFrames, targetSelectionFrameKey]);
+  const targetInvalidReason = useMemo(() => {
+    if (!draftTargetSelection) {
+      return null;
+    }
+    if (targetMissingTrackId) {
+      return "Select a player box.";
+    }
+    const bbox = {
+      x: draftTargetSelection.x,
+      y: draftTargetSelection.y,
+      w: draftTargetSelection.w,
+      h: draftTargetSelection.h
+    };
+    if (isBboxOutOfBounds(bbox) || isBboxTooSmallOrLarge(bbox)) {
+      return "Select a player box.";
+    }
+    const tracks = targetOverlayFrame?.tracks ?? [];
+    if (tracks.length === 0) {
+      return "Select a player box.";
+    }
+    const intersects = tracks.some((track) => {
+      const trackBbox = getTrackBBox(track);
+      if (!trackBbox) {
+        return false;
+      }
+      return calculateIoU(bbox, trackBbox) > 0;
+    });
+    return intersects ? null : "Select a player box.";
+  }, [draftTargetSelection, targetMissingTrackId, targetOverlayFrame]);
   const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
 
   return (
@@ -3578,15 +3757,24 @@ export default function JobRunner() {
                   type="button"
                   onClick={handleSaveSelection}
                   disabled={
-                    savingSelection || !draftTargetSelection || targetMissingTime
+                    savingSelection ||
+                    !draftTargetSelection ||
+                    targetMissingTime ||
+                    targetMissingFrameKey ||
+                    targetMissingTrackId ||
+                    Boolean(targetInvalidReason)
                   }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Confirming..." : "Confirm target"}
                 </button>
                 <span className="text-xs text-slate-500">
-                  {targetMissingTime
+                  {targetMissingFrameKey
+                    ? "Seleziona un frame dove il giocatore è visibile."
+                    : targetMissingTime
                     ? "Frame missing time_sec."
+                    : targetInvalidReason
+                    ? targetInvalidReason
                     : draftTargetSelection
                     ? "Ready to confirm selection."
                     : "Select one box to continue."}
@@ -3597,6 +3785,11 @@ export default function JobRunner() {
             {selectionError ? (
               <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
                 {selectionError}
+                {selectionRequestId ? (
+                  <div className="mt-2 text-[11px] text-rose-100/80">
+                    request_id: {selectionRequestId}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {selectionWarning ? (
@@ -3786,6 +3979,10 @@ export default function JobRunner() {
               <span className="text-xs text-slate-400">
                 {selectedFrameMissingTime
                   ? "Frame missing time_sec."
+                  : previewMode === "target" && targetMissingFrameKey
+                  ? "Seleziona un frame dove il giocatore è visibile."
+                  : previewMode === "target" && targetInvalidReason
+                  ? targetInvalidReason
                   : previewMode === "player-ref" && playerRefSelection
                   ? "Bounding box ready. Save to continue."
                   : previewMode === "target" && draftTargetSelection
@@ -3807,7 +4004,14 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={() => submitTargetSelection(false, true)}
-                  disabled={savingSelection || !draftTargetSelection || targetMissingTime}
+                  disabled={
+                    savingSelection ||
+                    !draftTargetSelection ||
+                    targetMissingTime ||
+                    targetMissingFrameKey ||
+                    targetMissingTrackId ||
+                    Boolean(targetInvalidReason)
+                  }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Confirming..." : "Confirm target"}
