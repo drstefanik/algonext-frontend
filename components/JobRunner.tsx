@@ -1805,7 +1805,7 @@ export default function JobRunner() {
       }
       if (errorCode === "TRACK_NOT_IN_FRAME") {
         setSelectionError(
-          "Il giocatore selezionato non è visibile in questo frame"
+          "Selected player not visible in this frame. Choose another frame."
         );
         setDraftTargetSelection(null);
         return;
@@ -1856,14 +1856,14 @@ export default function JobRunner() {
         null;
       if (!track) {
         setSelectionError(
-          "Selected player not present in this frame. Pick another frame."
+          "Selected player not visible in this frame. Choose another frame."
         );
         return;
       }
       const selection = buildTargetSelectionFromTrack(frame, track);
       if (!selection) {
         setSelectionError(
-          "Selected player not present in this frame. Pick another frame."
+          "Selected player not visible in this frame. Choose another frame."
         );
         return;
       }
@@ -3905,7 +3905,7 @@ export default function JobRunner() {
                     }
                     return (
                       <div
-                        className="absolute rounded border border-amber-400 bg-amber-400/20"
+                        className="absolute cursor-move rounded border border-amber-400 bg-amber-400/20 pointer-events-auto"
                         style={{
                           left: `${rect.left}px`,
                           top: `${rect.top}px`,
@@ -3945,14 +3945,14 @@ export default function JobRunner() {
                                   origin: draftTargetSelection
                                 });
                               }}
-                              className={`absolute h-3 w-3 rounded-sm border border-amber-200 bg-amber-300 ${
+                              className={`absolute h-3 w-3 rounded-sm border border-amber-200 bg-amber-300 pointer-events-auto ${
                                 handle === "resize-nw"
-                                  ? "left-0 top-0 -translate-x-1/2 -translate-y-1/2"
+                                  ? "left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize"
                                   : handle === "resize-ne"
-                                  ? "right-0 top-0 translate-x-1/2 -translate-y-1/2"
+                                  ? "right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize"
                                   : handle === "resize-sw"
-                                  ? "left-0 bottom-0 -translate-x-1/2 translate-y-1/2"
-                                  : "right-0 bottom-0 translate-x-1/2 translate-y-1/2"
+                                  ? "left-0 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize"
+                                  : "right-0 bottom-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize"
                               }`}
                             />
                           )
