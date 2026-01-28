@@ -64,8 +64,19 @@ export async function forward(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[proxy] Upstream fetch failed", {
+      targetUrl,
+      message
+    });
     return new Response(
-      JSON.stringify({ error: `Proxy error: ${message}` }),
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: "UPSTREAM_FETCH_FAILED",
+          message,
+          targetUrl
+        }
+      }),
       {
         status: 502,
         headers: {
