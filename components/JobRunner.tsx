@@ -723,11 +723,6 @@ export default function JobRunner() {
     height: number;
   } | null>(null);
 
-  const pickerFrame =
-    previewFramesWithImages.find((frame) => (frame.tracks ?? []).length > 0) ??
-    previewFramesWithImages[0] ??
-    null;
-  const pickerFrameSrc = pickerFrame ? getPreviewFrameSrc(pickerFrame) : "";
   const selectedCandidate =
     trackCandidates.find((candidate) => candidate.trackId === selectedTrackId) ??
     fallbackCandidates.find((candidate) => candidate.trackId === selectedTrackId) ??
@@ -863,6 +858,12 @@ export default function JobRunner() {
     }
     return `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
   };
+
+  const pickerFrame =
+    previewFramesWithImages.find((frame) => (frame.tracks ?? []).length > 0) ??
+    previewFramesWithImages[0] ??
+    null;
+  const pickerFrameSrc = pickerFrame ? getPreviewFrameSrc(pickerFrame) : "";
 
   const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
     const thumbnailUrl = candidate.thumbnailUrl ?? "";
