@@ -17,6 +17,16 @@ export async function GET(request: Request) {
     });
   }
 
+  if (url.includes(":9000") || url.includes("46.224.249.136")) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "INVALID_FRAME_URL_LEGACY" }),
+      {
+        status: 400,
+        headers: jsonHeaders
+      }
+    );
+  }
+
   let target: URL;
   try {
     target = new URL(url);
