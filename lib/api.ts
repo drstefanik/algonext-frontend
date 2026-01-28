@@ -80,6 +80,11 @@ export type PreviewFrameTrack = {
   h?: number | null;
 };
 
+export type OverlayFramesResponse = {
+  frames: PreviewFrame[];
+  overlayReady: boolean | null;
+};
+
 export type FrameItem = {
   name: string;
   url: string;
@@ -311,7 +316,14 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const height = frame.height ?? frame.h ?? null;
 
   const tracksSource =
-    frame.tracks ?? frame.track_candidates ?? frame.candidates ?? null;
+    frame.tracks ??
+    frame.track_overlays ??
+    frame.overlay_tracks ??
+    frame.overlayTracks ??
+    frame.trackOverlays ??
+    frame.track_candidates ??
+    frame.candidates ??
+    null;
   const tracks = Array.isArray(tracksSource)
     ? tracksSource.map((track) =>
         track && typeof track === "object"
@@ -904,7 +916,7 @@ export async function getJob(jobId: string, trackId?: string | null) {
   return mapped;
 }
 
-export async function getJobOverlayFrames(jobId: string) {
+export async function getJobOverlayFrames(jobId: string): Promise<OverlayFramesResponse> {
   const response = await fetchWithTimeout(
     `/api/jobs/${encodeURIComponent(jobId)}/frames/overlay?ts=${Date.now()}`,
     {
@@ -920,10 +932,19 @@ export async function getJobOverlayFrames(jobId: string) {
   const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
     await response.json().catch(() => null)
   );
+  const overlayReadyRaw =
+    payload && !Array.isArray(payload)
+      ? ((payload as UnknownRecord).overlay_ready ??
+          (payload as UnknownRecord).overlayReady ??
+          null)
+      : null;
   const framesSource = Array.isArray(payload)
     ? payload
     : payload?.frames ?? payload?.items ?? payload?.preview_frames ?? [];
-  return normalizePreviewFrames(framesSource);
+  return {
+    frames: normalizePreviewFrames(framesSource),
+    overlayReady: typeof overlayReadyRaw === "boolean" ? overlayReadyRaw : null
+  };
 }
 
 export async function getJobStatus(jobId: string) {
