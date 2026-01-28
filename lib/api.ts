@@ -158,6 +158,8 @@ export type TargetSelection = {
   frame_time_sec?: number | null;
   frame_key?: string | null;
   frameKey?: string | null;
+  trackId?: string | null;
+  track_id?: string | null;
   t?: number | null;
   x: number;
   y: number;
@@ -837,6 +839,9 @@ async function handleError(response: Response) {
   if (errorCode) {
     (error as Error & { code?: string }).code = errorCode;
   }
+  if (requestId) {
+    (error as Error & { requestId?: string }).requestId = requestId;
+  }
   if (allowForce !== null) {
     (error as Error & { allowForce?: boolean }).allowForce = allowForce;
   }
@@ -1033,11 +1038,34 @@ export async function saveJobTargetSelection(
   payload: { selections: TargetSelection[]; force?: boolean }
 ) {
   const selections = payload.selections.map((selection) => {
-    const frameTimeSec = selection.frameTimeSec ?? selection.frame_time_sec ?? null;
+    const frameTimeSec =
+      selection.frameTimeSec ?? selection.frame_time_sec ?? selection.t ?? null;
     const frameKey = selection.frameKey ?? selection.frame_key ?? null;
+    const trackId = selection.trackId ?? selection.track_id ?? null;
+    if (
+      !frameKey ||
+      !trackId ||
+      frameTimeSec === null ||
+      frameTimeSec === undefined
+    ) {
+      const error = new Error(
+        "Target selection payload missing frame_key, track_id, or time."
+      );
+      (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
+      throw error;
+    }
+    const bbox = {
+      x: selection.x,
+      y: selection.y,
+      w: selection.w,
+      h: selection.h
+    };
     return {
+      frame_key: frameKey,
+      track_id: trackId,
+      time_sec: frameTimeSec,
       frame_time_sec: frameTimeSec,
-      ...(frameKey ? { frame_key: frameKey } : {}),
+      bbox,
       x: selection.x,
       y: selection.y,
       w: selection.w,
