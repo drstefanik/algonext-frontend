@@ -67,6 +67,17 @@ export type PreviewFrame = {
   signedUrl?: string;
   width?: number | null;
   height?: number | null;
+  tracks?: PreviewFrameTrack[];
+};
+
+export type PreviewFrameTrack = {
+  trackId: string;
+  tier?: string | null;
+  scoreHint?: number | null;
+  x?: number | null;
+  y?: number | null;
+  w?: number | null;
+  h?: number | null;
 };
 
 export type FrameItem = {
@@ -220,6 +231,53 @@ const unwrap = <T,>(payload: unknown): T => {
   return payload as T;
 };
 
+const mapPreviewFrameTrack = (track: UnknownRecord): PreviewFrameTrack => {
+  const trackId =
+    String(
+      track.trackId ??
+        track.track_id ??
+        track.id ??
+        track.track ??
+        ""
+    ) || "unknown";
+  const tier =
+    track.tier ??
+    track.group ??
+    track.section ??
+    track.category ??
+    track.bucket ??
+    track.segment ??
+    null;
+  const scoreHint = coerceNumber(
+    track.score_hint ??
+      track.scoreHint ??
+      track.score ??
+      track.confidence ??
+      null
+  );
+  const bboxSource =
+    track.bbox_xywh ??
+    track.bbox ??
+    track.box ??
+    track.bounding_box ??
+    track.boundingBox ??
+    null;
+  const x = coerceNumber(bboxSource?.x ?? track.x);
+  const y = coerceNumber(bboxSource?.y ?? track.y);
+  const w = coerceNumber(bboxSource?.w ?? track.w);
+  const h = coerceNumber(bboxSource?.h ?? track.h);
+
+  return {
+    trackId,
+    tier,
+    scoreHint,
+    x,
+    y,
+    w,
+    h
+  };
+};
+
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
   const key =
@@ -252,6 +310,17 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
 
+  const tracksSource =
+    frame.tracks ?? frame.track_candidates ?? frame.candidates ?? null;
+  const tracks = Array.isArray(tracksSource)
+    ? tracksSource.map((track) =>
+        track && typeof track === "object"
+          ? mapPreviewFrameTrack(track as UnknownRecord)
+          : null
+      )
+    : null;
+  const filteredTracks = tracks?.filter(Boolean) as PreviewFrameTrack[] | null;
+
   return {
     ...frame,
     timeSec,
@@ -259,7 +328,8 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
     url,
     signedUrl: signedUrl ?? undefined,
     width,
-    height
+    height,
+    tracks: filteredTracks ?? undefined
   };
 };
 
@@ -684,6 +754,8 @@ const extractDetailMessage = (detail: unknown) => {
 async function handleError(response: Response) {
   let message = "";
   let requestId: string | null = null;
+  let errorCode: string | null = null;
+  let allowForce: boolean | null = null;
 
   try {
     const data = await response.clone().json();
@@ -705,6 +777,20 @@ async function handleError(response: Response) {
       message = `Manca: ${missingFields.join(", ")}`;
     }
     const detailMessage = extractDetailMessage(data?.detail);
+    errorCode =
+      data?.code ??
+      data?.error_code ??
+      data?.detail?.code ??
+      data?.detail?.error_code ??
+      null;
+    const allowForceRaw =
+      data?.allow_force ??
+      data?.allowForce ??
+      data?.detail?.allow_force ??
+      data?.detail?.allowForce ??
+      null;
+    allowForce =
+      typeof allowForceRaw === "boolean" ? allowForceRaw : allowForce ?? null;
     message =
       detailMessage ??
       (typeof data?.error === "string" ? data.error : data?.error?.message) ??
@@ -734,8 +820,15 @@ async function handleError(response: Response) {
   if (requestId) {
     console.warn("API request_id", requestId);
   }
-
-  throw new Error(message);
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = response.status;
+  if (errorCode) {
+    (error as Error & { code?: string }).code = errorCode;
+  }
+  if (allowForce !== null) {
+    (error as Error & { allowForce?: boolean }).allowForce = allowForce;
+  }
+  throw error;
 }
 
 export async function createJob(payload: CreateJobPayload) {
@@ -886,7 +979,7 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
 
 export async function saveJobTargetSelection(
   jobId: string,
-  payload: { selections: TargetSelection[] }
+  payload: { selections: TargetSelection[]; force?: boolean }
 ) {
   const selections = payload.selections.map((selection) => {
     const frameTimeSec = selection.frameTimeSec ?? selection.frame_time_sec ?? null;
@@ -900,9 +993,37 @@ export async function saveJobTargetSelection(
       h: selection.h
     };
   });
-  const requestPayload = { selections };
+  const requestPayload = {
+    selections,
+    ...(payload.force ? { force: true } : {})
+  };
   console.info("[target] payload", requestPayload);
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/target`, {
+    method: "POST",
+    headers: jsonHeaders,
+    cache: "no-store",
+    body: JSON.stringify(requestPayload)
+  });
+
+  if (!response.ok) {
+    await handleError(response);
+  }
+
+  const responsePayload = unwrap<UnknownRecord | null>(
+    await response.json().catch(() => null)
+  );
+  return responsePayload;
+}
+
+export async function pickJobPlayer(
+  jobId: string,
+  payload: { frameKey: string; trackId: string }
+) {
+  const requestPayload = {
+    frame_key: payload.frameKey,
+    track_id: payload.trackId
+  };
+  const response = await fetchWithTimeout(`/api/jobs/${jobId}/pick-player`, {
     method: "POST",
     headers: jsonHeaders,
     cache: "no-store",

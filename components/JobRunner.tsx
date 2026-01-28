@@ -16,7 +16,7 @@ import {
   getJobTrackCandidates,
   listJobFrames,
   normalizeJob,
-  selectJobTrack,
+  pickJobPlayer,
   saveJobPlayerRef,
   saveJobTargetSelection,
   type FrameItem,
@@ -30,6 +30,14 @@ import {
 import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 import { extractWarnings } from "@/lib/warnings";
+import PlayerPicker from "@/components/PlayerPicker";
+import {
+  clampNormalized,
+  coerceNumber,
+  getSelectionBBox,
+  getSelectionFrameKey,
+  getSelectionTimeSec
+} from "@/lib/selection";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
@@ -37,32 +45,6 @@ const REQUIRED_FRAME_COUNT = 8;
 const MIN_FRAMES = REQUIRED_FRAME_COUNT;
 
 const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
-
-const coerceNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-};
-
-const getTimeSec = (x: any): number | null =>
-  x?.timeSec ??
-  x?.time_sec ??
-  x?.frameTimeSec ??
-  x?.frame_time_sec ??
-  x?.t ??
-  null;
-
-const getFrameKey = (x: any): string | null =>
-  x?.frameKey ?? x?.frame_key ?? x?.key ?? null;
 
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 
@@ -104,7 +86,7 @@ const mapFrameItemToPreviewFrame = (
   frame: FrameItem,
   index: number
 ): PreviewFrame => {
-  const timeSec = coerceNumber(getTimeSec(frame));
+  const timeSec = coerceNumber(getSelectionTimeSec(frame));
   const key = frame.key ?? `frame-${timeSec}-${index}`;
   return {
     timeSec,
@@ -117,8 +99,9 @@ const mapFrameItemToPreviewFrame = (
 };
 
 const getCandidateSelection = (candidate: TrackCandidate) => {
-  const frameTimeSec = getTimeSec(candidate) ?? candidate.t ?? null;
-  const { x, y, w, h } = candidate;
+  const frameTimeSec = getSelectionTimeSec(candidate) ?? candidate.t ?? null;
+  const bbox = getSelectionBBox(candidate);
+  const { x, y, w, h } = bbox ?? {};
   if (
     frameTimeSec === null ||
     frameTimeSec === undefined ||
@@ -140,10 +123,12 @@ const resolveCandidateBox = (
   frame: TrackCandidateSampleFrame | null,
   candidate: TrackCandidate
 ) => {
-  const x = frame?.x ?? candidate.x ?? null;
-  const y = frame?.y ?? candidate.y ?? null;
-  const w = frame?.w ?? candidate.w ?? null;
-  const h = frame?.h ?? candidate.h ?? null;
+  const frameBox = frame ? getSelectionBBox(frame) : null;
+  const candidateBox = getSelectionBBox(candidate);
+  const x = frameBox?.x ?? candidateBox?.x ?? null;
+  const y = frameBox?.y ?? candidateBox?.y ?? null;
+  const w = frameBox?.w ?? candidateBox?.w ?? null;
+  const h = frameBox?.h ?? candidateBox?.h ?? null;
   if (
     x === null ||
     x === undefined ||
@@ -157,10 +142,30 @@ const resolveCandidateBox = (
     return null;
   }
   return {
-    x: clamp(x),
-    y: clamp(y),
-    w: clamp(w),
-    h: clamp(h)
+    x: clampNormalized(x),
+    y: clampNormalized(y),
+    w: clampNormalized(w),
+    h: clampNormalized(h)
+  };
+};
+
+const normalizeTargetSelection = (source: unknown): TargetSelection | null => {
+  const timeSec = getSelectionTimeSec(source);
+  const frameKey = getSelectionFrameKey(source);
+  const bbox = getSelectionBBox(source);
+  if (!bbox) {
+    return null;
+  }
+  return {
+    frameTimeSec: timeSec,
+    frame_time_sec: timeSec,
+    frameKey: frameKey ?? null,
+    frame_key: frameKey ?? null,
+    t: timeSec ?? null,
+    x: bbox.x,
+    y: bbox.y,
+    w: bbox.w,
+    h: bbox.h
   };
 };
 
@@ -371,6 +376,15 @@ type PreviewDragState = {
 
 type PreviewMode = "player-ref" | "target";
 
+type TargetAdjustMode = "move" | "resize-nw" | "resize-ne" | "resize-sw" | "resize-se";
+
+type TargetAdjustState = {
+  mode: TargetAdjustMode;
+  startX: number;
+  startY: number;
+  origin: TargetSelection;
+};
+
 export default function JobRunner() {
   const [videoUrl, setVideoUrl] = useState("");
   const [role, setRole] = useState("Striker");
@@ -388,6 +402,8 @@ export default function JobRunner() {
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
+  const [targetMismatchOpen, setTargetMismatchOpen] = useState(false);
+  const [targetMismatchAllowForce, setTargetMismatchAllowForce] = useState(false);
   const [playerRefError, setPlayerRefError] = useState<string | null>(null);
   const [playerCandidateError, setPlayerCandidateError] = useState<string | null>(
     null
@@ -422,6 +438,8 @@ export default function JobRunner() {
   const [selectingTrackId, setSelectingTrackId] = useState<string | null>(null);
   const [previewDragState, setPreviewDragState] =
     useState<PreviewDragState | null>(null);
+  const [targetAdjustState, setTargetAdjustState] =
+    useState<TargetAdjustState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
   const [framesFrozen, setFramesFrozen] = useState(false);
@@ -468,7 +486,17 @@ export default function JobRunner() {
     return statusStyles[displayStatus] ?? "bg-slate-800 text-slate-200";
   }, [displayStatus]);
 
-  const resolvedPreviewFrames = previewFrames;
+  const jobPreviewFrames = job?.previewFrames ?? [];
+  const resolvedPreviewFrames =
+    previewFrames.length > 0
+      ? previewFrames.map((frame) => {
+          const match = jobPreviewFrames.find(
+            (jobFrame) =>
+              getSelectionFrameKey(jobFrame) === getSelectionFrameKey(frame)
+          );
+          return match?.tracks ? { ...frame, tracks: match.tracks } : frame;
+        })
+      : jobPreviewFrames;
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -481,6 +509,13 @@ export default function JobRunner() {
     hasAnyPreviewFrames && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
+  const jobTargetDraftSource =
+    job?.target &&
+    typeof job.target === "object" &&
+    "selection" in (job.target as Record<string, unknown>)
+      ? (job.target as { selection?: unknown }).selection ?? null
+      : null;
+  const jobTargetDraft = normalizeTargetSelection(jobTargetDraftSource);
   const hasPlayerRef = Boolean(job?.playerRef);
   const hasTarget =
     Array.isArray(job?.target?.selections) && job.target.selections.length > 0;
@@ -610,7 +645,7 @@ export default function JobRunner() {
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
-  const canEnqueue = hasPlayerRef && (targetConfirmed || hasTarget);
+  const canEnqueue = hasPlayerRef && targetConfirmed;
   const enqueueHint = !canEnqueue
     ? "Seleziona player e target prima di avviare"
     : "Ready";
@@ -688,6 +723,61 @@ export default function JobRunner() {
     height: number;
   } | null>(null);
 
+  const pickerFrame =
+    previewFramesWithImages.find((frame) => (frame.tracks ?? []).length > 0) ??
+    previewFramesWithImages[0] ??
+    null;
+  const pickerFrameSrc = pickerFrame ? getPreviewFrameSrc(pickerFrame) : "";
+  const selectedCandidate =
+    trackCandidates.find((candidate) => candidate.trackId === selectedTrackId) ??
+    fallbackCandidates.find((candidate) => candidate.trackId === selectedTrackId) ??
+    null;
+  const selectedSampleFrames =
+    selectedCandidate?.sampleFrames?.filter((frame) => frame.imageUrl) ?? [];
+  const selectedSamplePreviewFrames =
+    selectedSampleFrames.length > 0
+      ? selectedSampleFrames.slice(0, 3)
+      : selectedCandidate?.thumbnailUrl
+        ? [
+            {
+              imageUrl: selectedCandidate.thumbnailUrl,
+              x: selectedCandidate.x ?? null,
+              y: selectedCandidate.y ?? null,
+              w: selectedCandidate.w ?? null,
+              h: selectedCandidate.h ?? null
+            }
+          ]
+        : [];
+  const playerRefRaw =
+    job?.playerRefRaw ??
+    (job ? (job as { player_ref?: unknown }).player_ref : null) ??
+    (job ? (job as { playerRef?: unknown }).playerRef : null) ??
+    null;
+  const bestPreviewFrameKey =
+    (playerRefRaw &&
+    typeof playerRefRaw === "object" &&
+    "best_preview_frame_key" in (playerRefRaw as Record<string, unknown>)
+      ? (playerRefRaw as { best_preview_frame_key?: string | null })
+          .best_preview_frame_key ?? null
+      : null) ??
+    (playerRefRaw &&
+    typeof playerRefRaw === "object" &&
+    "bestPreviewFrameKey" in (playerRefRaw as Record<string, unknown>)
+      ? (playerRefRaw as { bestPreviewFrameKey?: string | null })
+          .bestPreviewFrameKey ?? null
+      : null) ??
+    getSelectionFrameKey(playerRefRaw) ??
+    null;
+  const selectedPlayerPreviewFrame =
+    (bestPreviewFrameKey
+      ? previewFramesWithImages.find(
+          (frame) => getSelectionFrameKey(frame) === bestPreviewFrameKey
+        )
+      : null) ?? null;
+  const selectedPreviewThumbnail = selectedPlayerPreviewFrame
+    ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
+    : "";
+
   const activePreviewRect = previewDragState
     ? {
         left: Math.min(previewDragState.startX, previewDragState.currentX),
@@ -704,13 +794,13 @@ export default function JobRunner() {
     if (!selection || !frame) {
       return false;
     }
-    const selectionKey = getFrameKey(selection);
-    const frameKey = getFrameKey(frame);
+    const selectionKey = getSelectionFrameKey(selection);
+    const frameKey = getSelectionFrameKey(frame);
     if (selectionKey && frameKey) {
       return selectionKey === frameKey;
     }
-    const selectionTime = getTimeSec(selection);
-    const frameTime = getTimeSec(frame);
+    const selectionTime = getSelectionTimeSec(selection);
+    const frameTime = getSelectionTimeSec(frame);
     if (selectionTime == null || frameTime == null) {
       return false;
     }
@@ -723,33 +813,22 @@ export default function JobRunner() {
     if (!selection) {
       return { frame: null };
     }
-    const selectionKey = getFrameKey(selection);
-    if (selectionKey) {
-      const frame =
-        previewFramesWithImages.find(
-          (candidate) => getFrameKey(candidate) === selectionKey
-        ) ?? null;
+    const selectionKey = getSelectionFrameKey(selection);
+    if (!selectionKey) {
       return {
-        frame,
-        warning: frame
-          ? undefined
-          : `Frame_key ${selectionKey} non trovato nei preview.`
+        frame: null,
+        warning: "Frame_key mancante nel target. Impossibile aprire il frame."
       };
     }
-    const targetTime = getTimeSec(selection);
-    if (targetTime == null) {
-      return { frame: null, warning: "Frame time_sec mancante nel target." };
-    }
     const frame =
-      previewFramesWithImages.find((candidate) => {
-        const frameTime = getTimeSec(candidate);
-        return frameTime != null && Math.abs(frameTime - targetTime) < 0.05;
-      }) ?? null;
+      previewFramesWithImages.find(
+        (candidate) => getSelectionFrameKey(candidate) === selectionKey
+      ) ?? null;
     return {
       frame,
       warning: frame
-        ? "Frame risolto via time_sec (±0.05s). Verifica l'allineamento."
-        : "Frame target non trovato con tolleranza ±0.05s."
+        ? undefined
+        : `Frame_key ${selectionKey} non trovato nei preview.`
     };
   };
 
@@ -928,11 +1007,12 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
-    if (jobTargetSelection) {
-      setTargetSelection(jobTargetSelection);
-      setDraftTargetSelection(jobTargetSelection);
+    const draftSelection = jobTargetDraft ?? jobTargetSelection ?? null;
+    if (draftSelection) {
+      setTargetSelection(draftSelection);
+      setDraftTargetSelection(draftSelection);
     }
-  }, [jobTargetSelection]);
+  }, [jobTargetDraft, jobTargetSelection]);
 
   useEffect(() => {
     if (selectedTrackId) {
@@ -942,12 +1022,12 @@ export default function JobRunner() {
 
   useEffect(() => {
     setPlayerSaved(hasPlayerRef);
-    if (targetConfirmed || hasTarget) {
+    if (targetConfirmed) {
       setTargetSaved(true);
     } else if (!draftTargetSelection) {
       setTargetSaved(false);
     }
-  }, [hasPlayerRef, targetConfirmed, hasTarget, draftTargetSelection]);
+  }, [hasPlayerRef, targetConfirmed, draftTargetSelection]);
 
   useEffect(() => {
     if (!selectedPreviewFrame) {
@@ -1292,6 +1372,71 @@ export default function JobRunner() {
     }
   };
 
+  const resolveTrackFrameKey = (trackId: string) => {
+    if (!trackId) {
+      return null;
+    }
+    const frameMatch = previewFramesWithImages.find((frame) =>
+      (frame.tracks ?? []).some((track) => track.trackId === trackId)
+    );
+    if (frameMatch) {
+      return frameMatch.key;
+    }
+    return null;
+  };
+
+  const openTargetModalFromJob = (updatedJob: JobResponse) => {
+    const selection =
+      normalizeTargetSelection(
+        updatedJob.target &&
+          typeof updatedJob.target === "object" &&
+          "selection" in (updatedJob.target as Record<string, unknown>)
+          ? (updatedJob.target as { selection?: unknown }).selection ?? null
+          : null
+      ) ??
+      updatedJob.target?.selections?.[0] ??
+      null;
+    if (!selection) {
+      setSelectionError("Draft target non presente nel job. Verifica backend.");
+      return;
+    }
+    setDraftTargetSelection(selection);
+    const { frame: resolvedTargetFrame, warning } =
+      resolveTargetPreviewFrame(selection);
+    if (!resolvedTargetFrame) {
+      setSelectionError(warning ?? "Impossibile aprire il frame target.");
+      return;
+    }
+    setSelectionWarning(warning ?? null);
+    handleOpenPreview(resolvedTargetFrame, "target");
+  };
+
+  const handlePickPlayer = async (trackId: string, frameKey: string | null) => {
+    if (!jobId || !frameKey) {
+      return;
+    }
+    setPlayerCandidateError(null);
+    setSelectingTrackId(trackId);
+    try {
+      await pickJobPlayer(jobId, { frameKey, trackId });
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+      if (!updatedJob.playerRef) {
+        setPlayerCandidateError(
+          "Backend did not persist player_ref yet. Please retry or refresh."
+        );
+        return;
+      }
+      setSelectedTrackId(trackId);
+      setCandidateReview(null);
+      openTargetModalFromJob(updatedJob);
+    } catch (selectError) {
+      setPlayerCandidateError(toErrorMessage(selectError));
+    } finally {
+      setSelectingTrackId(null);
+    }
+  };
+
   const handleSelectTrack = async (candidate: TrackCandidate) => {
     if (!jobId) {
       return;
@@ -1303,25 +1448,17 @@ export default function JobRunner() {
       );
       return;
     }
-    setPlayerCandidateError(null);
-    setSelectingTrackId(candidate.trackId);
-    try {
-      await selectJobTrack(jobId, candidate);
-      const updatedJob = await getJob(jobId);
-      setJob(updatedJob);
-      if (!updatedJob.playerRef) {
-        setPlayerCandidateError(
-          "Backend did not persist player_ref yet. Please retry or refresh."
-        );
-      } else {
-        setSelectedTrackId(candidate.trackId);
-        setCandidateReview(null);
-      }
-    } catch (selectError) {
-      setPlayerCandidateError(toErrorMessage(selectError));
-    } finally {
-      setSelectingTrackId(null);
+    const frameKey =
+      resolveTrackFrameKey(candidate.trackId) ??
+      getSelectionFrameKey(candidate.sampleFrames?.[0]) ??
+      null;
+    if (!frameKey) {
+      setPlayerCandidateError(
+        "Frame_key mancante per questa traccia. Usa il picker overlay."
+      );
+      return;
     }
+    await handlePickPlayer(candidate.trackId, frameKey);
   };
 
   const handleReviewCandidate = (candidate: TrackCandidate) => {
@@ -1336,7 +1473,7 @@ export default function JobRunner() {
     setCandidateReview(candidate);
   };
 
-  const handleSaveSelection = async () => {
+  const submitTargetSelection = async (force?: boolean, closeOnSuccess?: boolean) => {
     if (!jobId || !draftTargetSelection) {
       return;
     }
@@ -1346,28 +1483,49 @@ export default function JobRunner() {
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
-        selections: [draftTargetSelection]
+        selections: [draftTargetSelection],
+        ...(force ? { force: true } : {})
       });
       const updatedJob = await getJob(jobId);
       setJob(updatedJob);
       const updatedSelection = updatedJob.target?.selections?.[0] ?? null;
       const updatedTargetConfirmed = Boolean(updatedJob.target?.confirmed);
-      const updatedTargetSaved = updatedTargetConfirmed || Boolean(updatedSelection);
       setTargetSelection(updatedSelection);
       setDraftTargetSelection(updatedSelection);
-      setTargetSaved(updatedTargetSaved);
-      if (updatedTargetSaved) {
-        setSelectionSuccess("Selection saved");
+      setTargetSaved(updatedTargetConfirmed);
+      if (updatedTargetConfirmed) {
+        setSelectionSuccess("Selection confirmed");
+        if (closeOnSuccess) {
+          handleClosePreview();
+        }
       } else {
         setSelectionError(
           "Selection not confirmed in backend. Please retry or check API logs."
         );
       }
     } catch (saveError) {
+      const error = saveError as Error & {
+        status?: number;
+        code?: string;
+        allowForce?: boolean;
+      };
+      if (
+        error?.status === 409 &&
+        (error?.code === "TARGET_MISMATCH" ||
+          error.message.toUpperCase().includes("TARGET_MISMATCH"))
+      ) {
+        setTargetMismatchAllowForce(Boolean(error.allowForce));
+        setTargetMismatchOpen(true);
+        return;
+      }
       setSelectionError(toErrorMessage(saveError));
     } finally {
       setSavingSelection(false);
     }
+  };
+
+  const handleSaveSelection = async () => {
+    await submitTargetSelection(false);
   };
 
   const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
@@ -1384,6 +1542,7 @@ export default function JobRunner() {
     setSelectedPreviewFrame(frame);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
+    setTargetAdjustState(null);
     setPlayerRefError(null);
     if (mode === "target") {
       setSelectionError(null);
@@ -1402,11 +1561,15 @@ export default function JobRunner() {
     setSelectedPreviewFrame(null);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
+    setTargetAdjustState(null);
   };
 
   const handlePreviewMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     const image = previewImageRef.current;
     if (!image) {
+      return;
+    }
+    if (previewMode === "target" && targetAdjustState) {
       return;
     }
     const rect = image.getBoundingClientRect();
@@ -1422,6 +1585,68 @@ export default function JobRunner() {
   };
 
   const handlePreviewMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    if (targetAdjustState) {
+      const image = previewImageRef.current;
+      if (!image) {
+        return;
+      }
+      const rect = image.getBoundingClientRect();
+      const currentX = event.clientX - rect.left;
+      const currentY = event.clientY - rect.top;
+      const dx = currentX - targetAdjustState.startX;
+      const dy = currentY - targetAdjustState.startY;
+      const width = image.clientWidth || rect.width;
+      const height = image.clientHeight || rect.height;
+      if (!width || !height) {
+        return;
+      }
+      const dxNorm = dx / width;
+      const dyNorm = dy / height;
+      const minSize = 0.02;
+      const origin = targetAdjustState.origin;
+      let next = { ...origin };
+
+      if (targetAdjustState.mode === "move") {
+        const maxX = 1 - origin.w;
+        const maxY = 1 - origin.h;
+        next.x = Math.min(Math.max(origin.x + dxNorm, 0), maxX);
+        next.y = Math.min(Math.max(origin.y + dyNorm, 0), maxY);
+      }
+
+      if (targetAdjustState.mode === "resize-se") {
+        next.w = Math.min(Math.max(origin.w + dxNorm, minSize), 1 - origin.x);
+        next.h = Math.min(Math.max(origin.h + dyNorm, minSize), 1 - origin.y);
+      }
+      if (targetAdjustState.mode === "resize-nw") {
+        const newX = Math.min(Math.max(origin.x + dxNorm, 0), origin.x + origin.w - minSize);
+        const newY = Math.min(Math.max(origin.y + dyNorm, 0), origin.y + origin.h - minSize);
+        next.w = Math.min(Math.max(origin.w - dxNorm, minSize), 1 - newX);
+        next.h = Math.min(Math.max(origin.h - dyNorm, minSize), 1 - newY);
+        next.x = newX;
+        next.y = newY;
+      }
+      if (targetAdjustState.mode === "resize-ne") {
+        const newY = Math.min(Math.max(origin.y + dyNorm, 0), origin.y + origin.h - minSize);
+        next.w = Math.min(Math.max(origin.w + dxNorm, minSize), 1 - origin.x);
+        next.h = Math.min(Math.max(origin.h - dyNorm, minSize), 1 - newY);
+        next.y = newY;
+      }
+      if (targetAdjustState.mode === "resize-sw") {
+        const newX = Math.min(Math.max(origin.x + dxNorm, 0), origin.x + origin.w - minSize);
+        next.w = Math.min(Math.max(origin.w - dxNorm, minSize), 1 - newX);
+        next.h = Math.min(Math.max(origin.h + dyNorm, minSize), 1 - origin.y);
+        next.x = newX;
+      }
+
+      setDraftTargetSelection({
+        ...origin,
+        x: clampNormalized(next.x),
+        y: clampNormalized(next.y),
+        w: clampNormalized(next.w),
+        h: clampNormalized(next.h)
+      });
+      return;
+    }
     if (!previewDragState) {
       return;
     }
@@ -1444,6 +1669,10 @@ export default function JobRunner() {
   };
 
   const handlePreviewMouseUp = () => {
+    if (targetAdjustState) {
+      setTargetAdjustState(null);
+      return;
+    }
     if (!previewDragState || !selectedPreviewFrame) {
       return;
     }
@@ -1513,6 +1742,7 @@ export default function JobRunner() {
         setSelectionError(null);
         setDraftTargetSelection({
           frameTimeSec: selectedPreviewFrame.timeSec,
+          frameKey: selectedPreviewFrame.key,
           frame_key: selectedPreviewFrame.key,
           x: normalized.x,
           y: normalized.y,
@@ -1704,6 +1934,7 @@ export default function JobRunner() {
     setSelectingTrackId(null);
     setGridMode("player-ref");
     setPreviewDragState(null);
+    setTargetAdjustState(null);
     setPreviewFrames([]);
     setFramesFrozen(false);
     setPreviewPollingError(null);
@@ -1713,72 +1944,30 @@ export default function JobRunner() {
     previewListRequestRef.current = 0;
     pollStartRef.current = null;
     setPollingTimedOut(false);
+    setTargetMismatchOpen(false);
+    setTargetMismatchAllowForce(false);
   };
 
   const handleSelectTargetFromFrames = () => {
-    if (previewFramesWithImages.length === 0) {
-      const rawPlayerRef =
-        (job ? (job as { playerRefRaw?: unknown }).playerRefRaw : null) ??
-        (job ? (job as { player_ref?: unknown }).player_ref : null) ??
-        (job ? (job as { playerRef?: unknown }).playerRef : null) ??
-        null;
-      const rawInputVideoUrl =
-        job?.result?.assets?.inputVideoUrl ??
-        job?.result?.assets?.input_video_url ??
-        (job
-          ? (job as { assets?: { inputVideoUrl?: string } }).assets?.inputVideoUrl
-          : null) ??
-        (job ? (job as { video_url?: string }).video_url : null) ??
-        null;
-      const previewFramesPayload =
-        (job ? (job as { preview_frames?: unknown[] }).preview_frames : null) ??
-        (job ? (job as { previewFrames?: unknown[] }).previewFrames : null) ??
-        job?.previewFrames ??
-        [];
-      const missingFields: string[] = [];
-
-      if (!rawPlayerRef) {
-        missingFields.push("player_ref/playerRef");
-      }
-      if (!rawInputVideoUrl) {
-        missingFields.push("assets.inputVideoUrl/video_url");
-      }
-      if (!Array.isArray(previewFramesPayload) || previewFramesPayload.length === 0) {
-        missingFields.push("preview_frames");
-      }
-      if (
-        Array.isArray(previewFramesPayload) &&
-        previewFramesPayload.length > 0 &&
-        resolvedPreviewFrames.every((frame) => !frame.signedUrl)
-      ) {
-        missingFields.push("signed_url nei frame");
-      }
-
-      console.warn("TARGET_FRAME_PICKER_EMPTY", {
-        missingFields,
-        rawPlayerRef,
-        rawInputVideoUrl,
-        previewFramesCount: Array.isArray(previewFramesPayload)
-          ? previewFramesPayload.length
-          : 0
-      });
-    }
     setSelectionError(null);
     setSelectionWarning(null);
-    const selectionSource = draftTargetSelection ?? targetSelection;
+    const selectionSource =
+      draftTargetSelection ?? jobTargetDraft ?? targetSelection ?? null;
+    if (!selectionSource) {
+      setSelectionError(
+        "Target draft mancante. Seleziona un player per generare il box."
+      );
+      return;
+    }
     const { frame: resolvedTargetFrame, warning } =
       resolveTargetPreviewFrame(selectionSource);
-    if (selectionSource) {
-      if (warning && resolvedTargetFrame) {
-        setSelectionWarning(warning);
-      }
-      if (resolvedTargetFrame) {
-        handleOpenPreview(resolvedTargetFrame, "target");
-      } else {
-        setSelectionError(
-          warning ?? "Impossibile risolvere il frame del target."
-        );
-      }
+    if (warning && resolvedTargetFrame) {
+      setSelectionWarning(warning);
+    }
+    if (resolvedTargetFrame) {
+      handleOpenPreview(resolvedTargetFrame, "target");
+    } else {
+      setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
     }
     setGridMode("target");
     playerSectionRef.current?.scrollIntoView({
@@ -1788,7 +1977,7 @@ export default function JobRunner() {
   };
 
   const playerRefMissingTime = playerRefSelection?.frameTimeSec == null;
-  const targetMissingTime = getTimeSec(draftTargetSelection) == null;
+  const targetMissingTime = getSelectionTimeSec(draftTargetSelection) == null;
   const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
 
   return (
@@ -1967,10 +2156,10 @@ export default function JobRunner() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Candidate selection
+                    Player selection
                   </p>
                   <p className="mt-2 text-sm text-slate-200">
-                    Choose the player track to follow.
+                    Use the overlay to pick the player track to follow.
                   </p>
                 </div>
                 {showPlayerSection ? (
@@ -1987,6 +2176,92 @@ export default function JobRunner() {
 
               {showPlayerSection ? (
                 <div className="mt-4 space-y-4">
+                  {pickerFrame && (pickerFrame.tracks ?? []).length > 0 ? (
+                    <PlayerPicker
+                      frame={pickerFrame}
+                      frameSrc={pickerFrameSrc}
+                      selectedTrackId={selectedTrackId}
+                      disabled={Boolean(selectingTrackId)}
+                      onPick={(trackId) =>
+                        handlePickPlayer(trackId, pickerFrame.key)
+                      }
+                    />
+                  ) : (
+                    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
+                      Track overlays non disponibili nei preview frame.
+                    </div>
+                  )}
+
+                  {selectedTrackId ? (
+                    <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-emerald-200">
+                            Selected player
+                          </p>
+                          <p className="mt-1 text-sm text-slate-200">
+                            Track {selectedTrackId}
+                            {selectedCandidate?.tier
+                              ? ` · ${selectedCandidate.tier}`
+                              : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+                          {selectedPreviewThumbnail ? (
+                            <img
+                              src={selectedPreviewThumbnail}
+                              alt="Selected player frame"
+                              className="h-24 w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
+                              Best preview not available
+                            </div>
+                          )}
+                        </div>
+                        {selectedSamplePreviewFrames.map((frame, index) => {
+                          const frameSrc = getCandidateSampleFrameSrc(
+                            frame.imageUrl ?? null
+                          );
+                          const bbox = selectedCandidate
+                            ? resolveCandidateBox(frame ?? null, selectedCandidate)
+                            : null;
+                          return (
+                            <div
+                              key={`${selectedTrackId}-sample-${index}`}
+                              className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+                            >
+                              {frameSrc ? (
+                                <img
+                                  src={frameSrc}
+                                  alt={`Selected sample ${index + 1}`}
+                                  className="h-24 w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
+                                  No sample
+                                </div>
+                              )}
+                              {bbox ? (
+                                <div
+                                  className="absolute rounded border border-emerald-300 bg-emerald-400/20"
+                                  style={{
+                                    left: `${bbox.x * 100}%`,
+                                    top: `${bbox.y * 100}%`,
+                                    width: `${bbox.w * 100}%`,
+                                    height: `${bbox.h * 100}%`
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
                   {autodetectLowCoverage ? (
                     <div className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
                       Low coverage – pick the best match
@@ -2021,6 +2296,9 @@ export default function JobRunner() {
                   ) : null}
                   {hasCandidateList ? (
                     <div className="space-y-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        All tracks
+                      </p>
                       {trackCandidates.length > 0 ? (
                         <>
                           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2941,13 +3219,13 @@ export default function JobRunner() {
                   }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingSelection ? "Saving..." : "Save selection"}
+                  {savingSelection ? "Confirming..." : "Confirm target"}
                 </button>
                 <span className="text-xs text-slate-500">
                   {targetMissingTime
                     ? "Frame missing time_sec."
                     : draftTargetSelection
-                    ? "Ready to save selection."
+                    ? "Ready to confirm selection."
                     : "Select one box to continue."}
                 </span>
               </div>
@@ -2996,14 +3274,14 @@ export default function JobRunner() {
                   id="preview-modal-title"
                   className="text-lg font-semibold text-white"
                 >
-                  {previewMode === "target" ? "Draw target box" : "Draw player box"}
+                  {previewMode === "target" ? "Confirm target box" : "Draw player box"}
                 </h3>
                 <p
                   id="preview-modal-description"
                   className="mt-1 text-sm text-slate-400"
                 >
                   {previewMode === "target"
-                    ? "Drag to mark the target in the selected frame."
+                    ? "Drag to refine the target, or resize using the handles."
                     : "Drag to mark the player in the selected frame."}
                 </p>
               </div>
@@ -3041,7 +3319,7 @@ export default function JobRunner() {
                   }
                 />
               )}
-              <div className="pointer-events-none absolute inset-0">
+              <div className="absolute inset-0">
                 {previewMode === "player-ref" && playerRefSelection ? (
                   (() => {
                     const rect = getSelectionDisplayRect(playerRefSelection);
@@ -3050,7 +3328,7 @@ export default function JobRunner() {
                     }
                     return (
                       <div
-                        className="absolute rounded border border-emerald-400 bg-emerald-400/20"
+                        className="pointer-events-none absolute rounded border border-emerald-400 bg-emerald-400/20"
                         style={{
                           left: `${rect.left}px`,
                           top: `${rect.top}px`,
@@ -3078,13 +3356,58 @@ export default function JobRunner() {
                           width: `${rect.width}px`,
                           height: `${rect.height}px`
                         }}
-                      />
+                        onMouseDown={(event) => {
+                          event.stopPropagation();
+                          const image = previewImageRef.current;
+                          if (!image || !draftTargetSelection) {
+                            return;
+                          }
+                          const bounds = image.getBoundingClientRect();
+                          setTargetAdjustState({
+                            mode: "move",
+                            startX: event.clientX - bounds.left,
+                            startY: event.clientY - bounds.top,
+                            origin: draftTargetSelection
+                          });
+                        }}
+                      >
+                        {(["resize-nw", "resize-ne", "resize-sw", "resize-se"] as const).map(
+                          (handle) => (
+                            <span
+                              key={handle}
+                              onMouseDown={(event) => {
+                                event.stopPropagation();
+                                const image = previewImageRef.current;
+                                if (!image || !draftTargetSelection) {
+                                  return;
+                                }
+                                const bounds = image.getBoundingClientRect();
+                                setTargetAdjustState({
+                                  mode: handle,
+                                  startX: event.clientX - bounds.left,
+                                  startY: event.clientY - bounds.top,
+                                  origin: draftTargetSelection
+                                });
+                              }}
+                              className={`absolute h-3 w-3 rounded-sm border border-amber-200 bg-amber-300 ${
+                                handle === "resize-nw"
+                                  ? "left-0 top-0 -translate-x-1/2 -translate-y-1/2"
+                                  : handle === "resize-ne"
+                                  ? "right-0 top-0 translate-x-1/2 -translate-y-1/2"
+                                  : handle === "resize-sw"
+                                  ? "left-0 bottom-0 -translate-x-1/2 translate-y-1/2"
+                                  : "right-0 bottom-0 translate-x-1/2 translate-y-1/2"
+                              }`}
+                            />
+                          )
+                        )}
+                      </div>
                     );
                   })()
                 ) : null}
                 {activePreviewRect ? (
                   <div
-                    className="absolute rounded border border-blue-400 bg-blue-400/20"
+                    className="pointer-events-none absolute rounded border border-blue-400 bg-blue-400/20"
                     style={{
                       left: activePreviewRect.left,
                       top: activePreviewRect.top,
@@ -3103,9 +3426,9 @@ export default function JobRunner() {
                   : previewMode === "player-ref" && playerRefSelection
                   ? "Bounding box ready. Save to continue."
                   : previewMode === "target" && draftTargetSelection
-                  ? "Bounding box ready. Save to continue."
+                  ? "Bounding box ready. Confirm to continue."
                   : previewMode === "target"
-                  ? "Drag on the image to draw the target box."
+                  ? "Drag on the image to adjust the target box."
                   : "Drag on the image to draw the player box."}
               </span>
               {previewMode === "player-ref" ? (
@@ -3120,10 +3443,11 @@ export default function JobRunner() {
               ) : (
                 <button
                   type="button"
-                  onClick={handleClosePreview}
-                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500"
+                  onClick={() => submitTargetSelection(false, true)}
+                  disabled={savingSelection || !draftTargetSelection || targetMissingTime}
+                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Use selection
+                  {savingSelection ? "Confirming..." : "Confirm target"}
                 </button>
               )}
             </div>
@@ -3133,6 +3457,44 @@ export default function JobRunner() {
                 {playerRefError}
               </div>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {targetMismatchOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md rounded-2xl border border-rose-400/40 bg-slate-900 p-6 shadow-xl"
+          >
+            <h4 className="text-lg font-semibold text-white">
+              Target mismatch
+            </h4>
+            <p className="mt-2 text-sm text-slate-200">
+              Il box non coincide con il giocatore selezionato.
+            </p>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setTargetMismatchOpen(false)}
+                className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500"
+              >
+                Riprova
+              </button>
+              {targetMismatchAllowForce ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setTargetMismatchOpen(false);
+                    await submitTargetSelection(true, true);
+                  }}
+                  className="rounded-lg bg-rose-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-rose-300"
+                >
+                  Forza
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
