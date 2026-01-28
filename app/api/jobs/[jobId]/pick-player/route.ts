@@ -1,5 +1,7 @@
 import { forward } from "../../../proxy";
 
+export const runtime = "nodejs";
+
 const API_BASE_URL = process.env.API_BASE_URL;
 
 type RouteContext = {

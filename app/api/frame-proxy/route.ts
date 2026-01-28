@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 const jsonHeaders = {
   "Content-Type": "application/json",
   "Cache-Control": "no-store"

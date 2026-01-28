@@ -10,7 +10,7 @@ This is a Next.js (App Router) frontend for creating, enqueueing, and monitoring
    ```
 2. Create a `.env.local` file with the backend API base URL:
    ```bash
-   API_BASE_URL=http://46.224.249.136:8000
+   API_BASE_URL=https://api.nextgroupintl.com
    ```
 3. Run the dev server:
    ```bash
@@ -21,7 +21,7 @@ This is a Next.js (App Router) frontend for creating, enqueueing, and monitoring
 ## Environment variables
 | Name | Required | Description |
 | --- | --- | --- |
-| `API_BASE_URL` | ✅ | Base URL for the AlgoNext backend API (e.g. `https://YOUR_API_DOMAIN` or `http://46.224.249.136:8000`). |
+| `API_BASE_URL` | ✅ | Base URL for the AlgoNext backend API (e.g. `https://api.nextgroupintl.com`). |
 
 ## Deploy to Vercel
 1. Import this repository into Vercel.
