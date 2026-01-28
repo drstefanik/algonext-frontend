@@ -769,10 +769,6 @@ export default function JobRunner() {
           (frame) => getSelectionFrameKey(frame) === bestPreviewFrameKey
         )
       : null) ?? null;
-  const selectedPreviewThumbnail = selectedPlayerPreviewFrame
-    ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
-    : "";
-
   const activePreviewRect = previewDragState
     ? {
         left: Math.min(previewDragState.startX, previewDragState.currentX),
@@ -864,6 +860,9 @@ export default function JobRunner() {
     previewFramesWithImages[0] ??
     null;
   const pickerFrameSrc = pickerFrame ? getPreviewFrameSrc(pickerFrame) : "";
+  const selectedPreviewThumbnail = selectedPlayerPreviewFrame
+    ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
+    : "";
 
   const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
     const thumbnailUrl = candidate.thumbnailUrl ?? "";
