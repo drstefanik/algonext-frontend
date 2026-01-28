@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     });
   }
 
-  if (url.includes(":9000") || url.includes("46.224.249.136")) {
+  if (!url.startsWith(ALLOWED_FRAME_URL_PREFIX)) {
     return new Response(
       JSON.stringify({ ok: false, error: "INVALID_FRAME_URL_LEGACY" }),
       {
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
 
   if (!target.toString().startsWith(ALLOWED_FRAME_URL_PREFIX)) {
     return new Response(
-      JSON.stringify({ ok: false, error: "INVALID_FRAME_URL" }),
+      JSON.stringify({ ok: false, error: "INVALID_FRAME_URL_LEGACY" }),
       {
         status: 400,
         headers: jsonHeaders

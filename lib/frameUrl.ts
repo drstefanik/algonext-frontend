@@ -12,7 +12,10 @@ export function normalizeFrameUrl(url: string): string {
       parsed.hostname === LEGACY_FRAME_HOSTNAME &&
       (parsed.port === LEGACY_FRAME_PORT || parsed.port === "")
     ) {
-      return `${PUBLIC_FRAME_HOST}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      return new URL(
+        `${parsed.pathname}${parsed.search}${parsed.hash}`,
+        PUBLIC_FRAME_HOST
+      ).toString();
     }
   } catch {
     return url;
