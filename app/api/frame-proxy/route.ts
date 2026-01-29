@@ -1,3 +1,5 @@
+import { normalizeFrameUrl } from "@/lib/frameUrl";
+
 export const runtime = "nodejs";
 
 const jsonHeaders = {
@@ -17,7 +19,19 @@ export async function GET(request: Request) {
     });
   }
 
-  if (!url.startsWith(ALLOWED_FRAME_URL_PREFIX)) {
+  const normalizedUrl = normalizeFrameUrl(url);
+
+  let target: URL;
+  try {
+    target = new URL(normalizedUrl);
+  } catch {
+    return new Response(JSON.stringify({ ok: false, error: "Invalid url" }), {
+      status: 400,
+      headers: jsonHeaders
+    });
+  }
+
+  if (target.port === "9000") {
     return new Response(
       JSON.stringify({ ok: false, error: "INVALID_FRAME_URL_LEGACY" }),
       {
@@ -25,16 +39,6 @@ export async function GET(request: Request) {
         headers: jsonHeaders
       }
     );
-  }
-
-  let target: URL;
-  try {
-    target = new URL(url);
-  } catch {
-    return new Response(JSON.stringify({ ok: false, error: "Invalid url" }), {
-      status: 400,
-      headers: jsonHeaders
-    });
   }
 
   if (!target.toString().startsWith(ALLOWED_FRAME_URL_PREFIX)) {
