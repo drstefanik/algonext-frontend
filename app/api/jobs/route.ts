@@ -4,6 +4,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const API_BASE_URL = process.env.API_BASE_URL;
+let loggedBaseUrl = false;
+
+const logApiBaseUrlHost = (value: string) => {
+  if (loggedBaseUrl) {
+    return;
+  }
+  loggedBaseUrl = true;
+  try {
+    const url = new URL(value);
+    console.info("[jobs] API_BASE_URL host", { host: url.host });
+  } catch {
+    console.info("[jobs] API_BASE_URL host", { host: "invalid" });
+  }
+};
 
 export async function POST(request: Request) {
   try {
@@ -13,6 +27,18 @@ export async function POST(request: Request) {
         { status: 500, headers: { "content-type": "application/json", "cache-control": "no-store" } }
       );
     }
+
+    if (!API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://")) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "Invalid API_BASE_URL. It must start with http:// or https://."
+        }),
+        { status: 500, headers: { "content-type": "application/json", "cache-control": "no-store" } }
+      );
+    }
+
+    logApiBaseUrlHost(API_BASE_URL);
 
     return forward(request, `${API_BASE_URL}/jobs`);
   } catch (err) {
