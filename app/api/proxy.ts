@@ -1,7 +1,11 @@
+import { NextResponse } from "next/server";
+
 type ForwardOptions = {
   methodOverride?: string;
   includeBody?: boolean;
 };
+
+const generateRequestId = () => crypto.randomUUID();
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -23,12 +27,14 @@ export async function forward(
   targetUrl: string,
   { methodOverride, includeBody = true }: ForwardOptions = {}
 ) {
+  const requestId = generateRequestId();
   try {
     const headers = new Headers();
     request.headers.forEach((value, key) => {
       const k = key.toLowerCase();
       if (!HOP_BY_HOP.has(k)) headers.set(key, value);
     });
+    headers.set("x-request-id", requestId);
 
     // IMPORTANT: non usare request.body (stream) su Vercel.
     // Bufferizza il body: stabile per JSON piccoli.
@@ -42,12 +48,36 @@ export async function forward(
     });
 
     const responseBody = await upstreamResponse.text();
+    const upstreamContentType =
+      upstreamResponse.headers.get("content-type") ?? "unknown";
+    console.info("[proxy] Upstream response", {
+      requestId,
+      targetUrl,
+      status: upstreamResponse.status,
+      contentType: upstreamContentType
+    });
 
-    if (!upstreamResponse.ok) {
-      console.error("[proxy] Upstream error", {
-        status: upstreamResponse.status,
-        body: responseBody
-      });
+    const isHtmlResponse = upstreamContentType.includes("text/html");
+    if (isHtmlResponse && upstreamResponse.status >= 500) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: "UPSTREAM_BAD_GATEWAY",
+            message: "Upstream returned an HTML error response.",
+            status: upstreamResponse.status,
+            targetUrl,
+            requestId
+          }
+        },
+        {
+          status: upstreamResponse.status,
+          headers: {
+            "cache-control": "no-store",
+            "x-request-id": requestId
+          }
+        }
+      );
     }
 
     const resHeaders = new Headers();
@@ -57,6 +87,7 @@ export async function forward(
         resHeaders.set(key, value);
       }
     });
+    resHeaders.set("x-request-id", requestId);
 
     return new Response(responseBody, {
       status: upstreamResponse.status,
@@ -65,23 +96,25 @@ export async function forward(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[proxy] Upstream fetch failed", {
+      requestId,
       targetUrl,
       message
     });
-    return new Response(
-      JSON.stringify({
+    return NextResponse.json(
+      {
         ok: false,
         error: {
-          code: "UPSTREAM_FETCH_FAILED",
+          code: "UPSTREAM_UNREACHABLE",
           message,
-          targetUrl
+          targetUrl,
+          requestId
         }
-      }),
+      },
       {
         status: 502,
         headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store"
+          "cache-control": "no-store",
+          "x-request-id": requestId
         }
       }
     );

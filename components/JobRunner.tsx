@@ -263,6 +263,23 @@ const buildTargetSelectionFromTrack = (
 
 const buildHttpErrorMessage = async (response: Response) => {
   let message = "";
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    try {
+      const rawBody = await response.clone().text();
+      console.error("[jobs] Non-JSON error response", {
+        status: response.status,
+        body: rawBody
+      });
+    } catch {
+      // ignore logging failures
+    }
+    if (response.status >= 500) {
+      return `Server unavailable (${response.status}). Please retry.`;
+    }
+    return `Unexpected response (${response.status}).`;
+  }
 
   try {
     const data = (await response.clone().json()) as
@@ -436,6 +453,20 @@ const fetchJsonWithTimeout = async <T,>(input: RequestInfo | URL) => {
     if (!response.ok) {
       const message = await buildHttpErrorMessage(response);
       throw new Error(message);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      try {
+        const rawBody = await response.text();
+        console.error("[jobs] Non-JSON success response", {
+          status: response.status,
+          body: rawBody
+        });
+      } catch {
+        // ignore logging failures
+      }
+      throw new Error("Unexpected response from server.");
     }
 
     return (await response.json()) as T;
