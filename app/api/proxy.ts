@@ -28,6 +28,13 @@ export async function forward(
   { methodOverride, includeBody = true }: ForwardOptions = {}
 ) {
   const requestId = generateRequestId();
+  const targetHost = (() => {
+    try {
+      return new URL(targetUrl).host;
+    } catch {
+      return "unknown";
+    }
+  })();
   try {
     const headers = new Headers();
     request.headers.forEach((value, key) => {
@@ -48,30 +55,28 @@ export async function forward(
     });
 
     const responseBody = await upstreamResponse.text();
-    const upstreamContentType =
-      upstreamResponse.headers.get("content-type") ?? "unknown";
+    const upstreamContentType = (
+      upstreamResponse.headers.get("content-type") ?? ""
+    ).toLowerCase();
     console.info("[proxy] Upstream response", {
       requestId,
-      targetUrl,
-      status: upstreamResponse.status,
-      contentType: upstreamContentType
+      targetHost,
+      status: upstreamResponse.status
     });
 
-    const isHtmlResponse = upstreamContentType.includes("text/html");
-    if (isHtmlResponse && upstreamResponse.status >= 500) {
+    const isJsonResponse = upstreamContentType.includes("application/json");
+    if (!isJsonResponse) {
       return NextResponse.json(
         {
           ok: false,
           error: {
             code: "UPSTREAM_BAD_GATEWAY",
-            message: "Upstream returned an HTML error response.",
-            status: upstreamResponse.status,
-            targetUrl,
-            requestId
+            message: "Backend API unavailable",
+            status: 502
           }
         },
         {
-          status: upstreamResponse.status,
+          status: 502,
           headers: {
             "cache-control": "no-store",
             "x-request-id": requestId
@@ -97,8 +102,8 @@ export async function forward(
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[proxy] Upstream fetch failed", {
       requestId,
-      targetUrl,
-      message
+      targetHost,
+      status: "fetch_failed"
     });
     return NextResponse.json(
       {
