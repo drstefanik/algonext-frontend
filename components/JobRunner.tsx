@@ -600,8 +600,12 @@ export default function JobRunner() {
   const [analysisPolling, setAnalysisPolling] = useState(false);
   const [analysisRequesting, setAnalysisRequesting] = useState(false);
 
-  const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
-    frame.signedUrl ?? frame.url ?? "";
+  const resolvePreviewFrameUrl = (frame: PreviewFrame) => {
+    const publicFrameUrl = frame.key
+      ? `https://s3.nextgroupintl.com/fnh/${frame.key}`
+      : "";
+    return publicFrameUrl || frame.signedUrl ?? frame.url ?? "";
+  };
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
