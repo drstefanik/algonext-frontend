@@ -22,6 +22,7 @@ import {
   type FrameSelection,
   type JobResponse,
   type PreviewFrame,
+  type PreviewFrameTrack,
   type TrackCandidate,
   type TrackCandidateSampleFrame,
   type TargetSelection
@@ -36,7 +37,8 @@ import {
   coerceNumber,
   getSelectionBBox,
   getSelectionFrameKey,
-  getSelectionTimeSec
+  getSelectionTimeSec,
+  type NormalizedBBox
 } from "@/lib/selection";
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
@@ -882,21 +884,17 @@ export default function JobRunner() {
       return { frame: null };
     }
     const selectionKey = getSelectionFrameKey(selection);
-    if (!selectionKey) {
-      return {
-        frame: null,
-        warning: "Seleziona un frame dove il giocatore è visibile."
-      };
-    }
     const frame =
       previewFramesWithImages.find(
-        (candidate) => getSelectionFrameKey(candidate) === selectionKey
+        (candidate) => selectionMatchesFrame(selection, candidate)
       ) ?? null;
     return {
       frame,
       warning: frame
         ? undefined
-        : `Frame_key ${selectionKey} non trovato nei preview.`
+        : selectionKey
+        ? `Frame_key ${selectionKey} non trovato nei preview.`
+        : "Frame non trovato nei preview."
     };
   };
 
@@ -921,6 +919,18 @@ export default function JobRunner() {
       top: selection.y * previewImageSize.height,
       width: selection.w * previewImageSize.width,
       height: selection.h * previewImageSize.height
+    };
+  };
+
+  const getBBoxDisplayRect = (bbox: { x: number; y: number; w: number; h: number }) => {
+    if (!previewImageSize) {
+      return null;
+    }
+    return {
+      left: bbox.x * previewImageSize.width,
+      top: bbox.y * previewImageSize.height,
+      width: bbox.w * previewImageSize.width,
+      height: bbox.h * previewImageSize.height
     };
   };
 
@@ -1653,7 +1663,12 @@ export default function JobRunner() {
   };
 
   const submitTargetSelection = async (force?: boolean, closeOnSuccess?: boolean) => {
-    if (!jobId || !draftTargetSelection) {
+    if (!jobId) {
+      return;
+    }
+    const selections = draftTargetSelection ? [draftTargetSelection] : [];
+    if (selections.length === 0) {
+      setOverlayToast("Select a target box first");
       return;
     }
     setSelectionError(null);
@@ -1663,7 +1678,7 @@ export default function JobRunner() {
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
-        selections: [draftTargetSelection],
+        selections,
         ...(force ? { force: true } : {})
       });
       const updatedJob = await getJob(jobId);
@@ -1874,6 +1889,23 @@ export default function JobRunner() {
     );
   };
 
+  const setTargetSelectionFromBBox = (frame: PreviewFrame, bbox: NormalizedBBox) => {
+    const frameTimeSec = getSelectionTimeSec(frame);
+    if (frameTimeSec == null) {
+      setSelectionError("Frame missing time_sec.");
+      return;
+    }
+    setSelectionSuccess(null);
+    setSelectionError(null);
+    setDraftTargetSelection({
+      frame_time_sec: frameTimeSec,
+      x: bbox.x,
+      y: bbox.y,
+      w: bbox.w,
+      h: bbox.h
+    });
+  };
+
   const handlePreviewMouseUp = () => {
     if (targetAdjustState) {
       setTargetAdjustState(null);
@@ -1944,22 +1976,27 @@ export default function JobRunner() {
           h: normalized.h
         });
       } else {
-        setSelectionSuccess(null);
-        setSelectionError(null);
-        setDraftTargetSelection({
-          frameTimeSec: selectedPreviewFrame.timeSec,
-          frameKey: selectedPreviewFrame.key,
-          frame_key: selectedPreviewFrame.key,
-          trackId: selectedTrackId ?? null,
-          track_id: selectedTrackId ?? null,
-          x: normalized.x,
-          y: normalized.y,
-          w: normalized.w,
-          h: normalized.h
-        });
+        setTargetSelectionFromBBox(selectedPreviewFrame, normalized);
       }
     }
     setPreviewDragState(null);
+  };
+
+  const handleSelectPreviewTrack = (track: PreviewFrameTrack) => {
+    if (!selectedPreviewFrame) {
+      return;
+    }
+    const bbox = getSelectionBBox(track);
+    if (!bbox) {
+      setSelectionError("Missing selection data for this track.");
+      return;
+    }
+    setTargetSelectionFromBBox(selectedPreviewFrame, {
+      x: clampNormalized(bbox.x),
+      y: clampNormalized(bbox.y),
+      w: clampNormalized(bbox.w),
+      h: clampNormalized(bbox.h)
+    });
   };
 
   const handlePreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -2185,12 +2222,10 @@ export default function JobRunner() {
   };
 
   const playerRefMissingTime = playerRefSelection?.frameTimeSec == null;
-  const targetMissingTime = getSelectionTimeSec(draftTargetSelection) == null;
-  const targetMissingFrameKey = Boolean(
-    draftTargetSelection && !getSelectionFrameKey(draftTargetSelection)
-  );
-  const targetSelectionFrameKey =
-    getSelectionFrameKey(draftTargetSelection) ?? selectedPreviewFrame?.key ?? null;
+  const targetMissingTime =
+    draftTargetSelection ? getSelectionTimeSec(draftTargetSelection) == null : false;
+  const targetSelections = draftTargetSelection ? [draftTargetSelection] : [];
+  const targetSelectionsEmpty = targetSelections.length === 0;
   const targetInvalidReason = useMemo(() => {
     if (!draftTargetSelection) {
       return null;
@@ -3638,21 +3673,13 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={handleSaveSelection}
-                  disabled={
-                    savingSelection ||
-                    !draftTargetSelection ||
-                    targetMissingTime ||
-                    targetMissingFrameKey ||
-                    Boolean(targetInvalidReason)
-                  }
+                  disabled={targetSelectionsEmpty}
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Confirming..." : "Confirm target"}
                 </button>
                 <span className="text-xs text-slate-500">
-                  {targetMissingFrameKey
-                    ? "Seleziona un frame dove il giocatore è visibile."
-                    : targetMissingTime
+                  {targetMissingTime
                     ? "Frame missing time_sec."
                     : targetInvalidReason
                     ? targetInvalidReason
@@ -3757,6 +3784,36 @@ export default function JobRunner() {
                 />
               )}
               <div className="absolute inset-0">
+                {previewMode === "target"
+                  ? selectedPreviewFrame.tracks?.map((track, index) => {
+                      const bbox = getSelectionBBox(track);
+                      if (!bbox) {
+                        return null;
+                      }
+                      const rect = getBBoxDisplayRect(bbox);
+                      if (!rect) {
+                        return null;
+                      }
+                      return (
+                        <button
+                          key={`track-${track.trackId}-${index}`}
+                          type="button"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleSelectPreviewTrack(track);
+                          }}
+                          className="absolute rounded border border-amber-200/70 bg-amber-300/10 transition hover:border-amber-200"
+                          style={{
+                            left: `${rect.left}px`,
+                            top: `${rect.top}px`,
+                            width: `${rect.width}px`,
+                            height: `${rect.height}px`
+                          }}
+                        />
+                      );
+                    })
+                  : null}
                 {previewMode === "player-ref" && playerRefSelection ? (
                   (() => {
                     const rect = getSelectionDisplayRect(playerRefSelection);
@@ -3860,8 +3917,6 @@ export default function JobRunner() {
               <span className="text-xs text-slate-400">
                 {selectedFrameMissingTime
                   ? "Frame missing time_sec."
-                  : previewMode === "target" && targetMissingFrameKey
-                  ? "Seleziona un frame dove il giocatore è visibile."
                   : previewMode === "target" && targetInvalidReason
                   ? targetInvalidReason
                   : previewMode === "player-ref" && playerRefSelection
@@ -3885,13 +3940,7 @@ export default function JobRunner() {
                 <button
                   type="button"
                   onClick={() => submitTargetSelection(false, true)}
-                  disabled={
-                    savingSelection ||
-                    !draftTargetSelection ||
-                    targetMissingTime ||
-                    targetMissingFrameKey ||
-                    Boolean(targetInvalidReason)
-                  }
+                  disabled={targetSelectionsEmpty}
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingSelection ? "Confirming..." : "Confirm target"}
