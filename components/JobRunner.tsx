@@ -1685,19 +1685,16 @@ export default function JobRunner() {
     if (!jobId) {
       return;
     }
-    const selections = draftTargetSelection ? [draftTargetSelection] : [];
-    if (selections.length === 0) {
+    const selection = draftTargetSelection;
+    if (!selection) {
       setOverlayToast("Select a target box first");
       return;
     }
     const frameKey =
-      selectedFrameKey ??
-      getSelectionFrameKey(draftTargetSelection) ??
-      selectedPreviewFrame?.key ??
-      null;
+      selectedFrameKey ?? getSelectionFrameKey(selection) ?? selectedPreviewFrame?.key ?? null;
     const frameTimeSec =
       selectedFrameTimeSec ??
-      getSelectionTimeSec(draftTargetSelection) ??
+      getSelectionTimeSec(selection) ??
       selectedPreviewFrame?.timeSec ??
       null;
     if (!frameKey) {
@@ -1709,10 +1706,10 @@ export default function JobRunner() {
       return;
     }
     const bbox = {
-      x: draftTargetSelection.x,
-      y: draftTargetSelection.y,
-      w: draftTargetSelection.w,
-      h: draftTargetSelection.h
+      x: selection.x,
+      y: selection.y,
+      w: selection.w,
+      h: selection.h
     };
     setSelectionError(null);
     setSelectionSuccess(null);
