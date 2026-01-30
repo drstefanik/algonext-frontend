@@ -13,19 +13,15 @@ import {
   createJob,
   enqueueJob,
   getJob,
-  getJobOverlayFrames,
+  getJobFrames,
   getJobTrackCandidates,
-  listJobFrames,
   normalizeJob,
-  analyzeJobPlayer,
   pickJobPlayer,
   saveJobPlayerRef,
   saveJobTargetSelection,
-  type FrameItem,
   type FrameSelection,
   type JobResponse,
   type PreviewFrame,
-  type PreviewFrameTrack,
   type TrackCandidate,
   type TrackCandidateSampleFrame,
   type TargetSelection
@@ -33,7 +29,6 @@ import {
 import ProgressBar from "@/components/ProgressBar";
 import ResultView from "@/components/ResultView";
 import { extractWarnings } from "@/lib/warnings";
-import PlayerPicker from "@/components/PlayerPicker";
 import OverlayFramesGallery from "@/components/OverlayFramesGallery";
 import { normalizeFrameUrl } from "@/lib/frameUrl";
 import {
@@ -63,29 +58,6 @@ const isBboxTooSmallOrLarge = (bbox: { x: number; y: number; w: number; h: numbe
   const minSize = 0.02;
   const maxSize = 0.98;
   return bbox.w < minSize || bbox.h < minSize || bbox.w > maxSize || bbox.h > maxSize;
-};
-
-const calculateIoU = (
-  a: { x: number; y: number; w: number; h: number },
-  b: { x: number; y: number; w: number; h: number }
-) => {
-  const ax2 = a.x + a.w;
-  const ay2 = a.y + a.h;
-  const bx2 = b.x + b.w;
-  const by2 = b.y + b.h;
-  const interLeft = Math.max(a.x, b.x);
-  const interTop = Math.max(a.y, b.y);
-  const interRight = Math.min(ax2, bx2);
-  const interBottom = Math.min(ay2, by2);
-  const interWidth = Math.max(0, interRight - interLeft);
-  const interHeight = Math.max(0, interBottom - interTop);
-  const interArea = interWidth * interHeight;
-  if (interArea <= 0) {
-    return 0;
-  }
-  const areaA = a.w * a.h;
-  const areaB = b.w * b.h;
-  return interArea / (areaA + areaB - interArea);
 };
 
 const formatFrameTime = (timeSec: number | null) =>
@@ -121,22 +93,6 @@ const formatPercent = (value: number | null | undefined) =>
 
 const formatScore = (value: number | null | undefined) =>
   value === null || value === undefined ? "—" : value.toFixed(2);
-
-const mapFrameItemToPreviewFrame = (
-  frame: FrameItem,
-  index: number
-): PreviewFrame => {
-  const timeSec = coerceNumber(getSelectionTimeSec(frame));
-  const key = frame.key ?? `frame-${timeSec}-${index}`;
-  return {
-    timeSec,
-    key,
-    url: frame.url,
-    signedUrl: frame.url,
-    width: frame.width ?? null,
-    height: frame.height ?? null
-  };
-};
 
 const getCandidateSelection = (candidate: TrackCandidate) => {
   const frameTimeSec = getSelectionTimeSec(candidate) ?? candidate.t ?? null;
@@ -215,49 +171,6 @@ const normalizeTargetSelection = (source: unknown): TargetSelection | null => {
     y: bbox.y,
     w: bbox.w,
     h: bbox.h
-  };
-};
-
-const getTrackBBox = (track: PreviewFrameTrack | null | undefined) => {
-  if (!track) {
-    return null;
-  }
-  if (
-    !isFiniteNumber(track.x) ||
-    !isFiniteNumber(track.y) ||
-    !isFiniteNumber(track.w) ||
-    !isFiniteNumber(track.h)
-  ) {
-    return null;
-  }
-  return {
-    x: track.x,
-    y: track.y,
-    w: track.w,
-    h: track.h
-  };
-};
-
-const buildTargetSelectionFromTrack = (
-  frame: PreviewFrame,
-  track: PreviewFrameTrack
-): TargetSelection | null => {
-  const bbox = getTrackBBox(track);
-  if (!bbox) {
-    return null;
-  }
-  return {
-    frameTimeSec: frame.timeSec ?? null,
-    frame_time_sec: frame.timeSec ?? null,
-    frameKey: frame.key,
-    frame_key: frame.key,
-    trackId: track.trackId,
-    track_id: track.trackId,
-    t: frame.timeSec ?? null,
-    x: clampNormalized(bbox.x),
-    y: clampNormalized(bbox.y),
-    w: clampNormalized(bbox.w),
-    h: clampNormalized(bbox.h)
   };
 };
 
@@ -566,11 +479,7 @@ export default function JobRunner() {
     useState<TargetAdjustState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
-  const [overlayFrames, setOverlayFrames] = useState<PreviewFrame[]>([]);
-  const [overlayFramesLoading, setOverlayFramesLoading] = useState(false);
-  const [overlayFramesError, setOverlayFramesError] = useState<string | null>(null);
-  const [overlayReadyFlag, setOverlayReadyFlag] = useState<boolean | null>(null);
-  const [showLegacyFlow, setShowLegacyFlow] = useState(false);
+  const [showLegacyFlow] = useState(false);
   const [overlayToast, setOverlayToast] = useState<string | null>(null);
   const [framesFrozen, setFramesFrozen] = useState(false);
   const [previewPollingError, setPreviewPollingError] = useState<string | null>(
@@ -657,16 +566,7 @@ export default function JobRunner() {
           return match?.tracks ? { ...frame, tracks: match.tracks } : frame;
         })
       : jobPreviewFrames;
-  const overlayGalleryFrames = overlayFrames;
-  const overlayFramesWithTracks = overlayFrames.filter(
-    (frame) => (frame.tracks ?? []).length > 0
-  );
-  const overlayHasTracks = overlayFramesWithTracks.length > 0;
-  const overlayReady =
-    (overlayReadyFlag === null || overlayReadyFlag === true) && overlayHasTracks;
-  const overlayFramesWithImages = overlayFrames.filter((frame) =>
-    Boolean(resolvePreviewFrameUrl(frame))
-  );
+  const overlayGalleryFrames = previewFrames;
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -1077,11 +977,6 @@ export default function JobRunner() {
   const getPreviewFrameSrc = (frame: PreviewFrame) =>
     getCachedFrameSrc(`preview-${frame.key}`, resolvePreviewFrameUrl(frame));
 
-  const pickerFrame =
-    overlayFramesWithImages.find((frame) => (frame.tracks ?? []).length > 0) ??
-    overlayFramesWithImages[0] ??
-    null;
-  const pickerFrameSrc = pickerFrame ? getPreviewFrameSrc(pickerFrame) : "";
   const selectedPreviewThumbnail = selectedPlayerPreviewFrame
     ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
     : "";
@@ -1234,53 +1129,6 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
-    if (!jobId) {
-      setOverlayFrames([]);
-      setOverlayFramesError(null);
-      setOverlayFramesLoading(false);
-      setOverlayReadyFlag(null);
-      return;
-    }
-
-    let isMounted = true;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const fetchOverlayFrames = async () => {
-      setOverlayFramesLoading(true);
-      try {
-        const { frames, overlayReady: readyFlag } = await getJobOverlayFrames(jobId);
-        if (isMounted) {
-          setOverlayFrames(frames);
-          setOverlayReadyFlag(readyFlag);
-          setOverlayFramesError(null);
-        }
-
-        const hasTracks = frames.some((frame) => (frame.tracks ?? []).length > 0);
-        const isReady = readyFlag !== false && hasTracks;
-        if (!isReady && isMounted) {
-          timeoutId = setTimeout(fetchOverlayFrames, 2000);
-        }
-      } catch (fetchError) {
-        if (isMounted) {
-          setOverlayFramesError(toErrorMessage(fetchError));
-        }
-      } finally {
-        if (isMounted) {
-          setOverlayFramesLoading(false);
-        }
-      }
-    };
-
-    fetchOverlayFrames();
-
-    return () => {
-      isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [jobId]);
-
-  useEffect(() => {
     if (!overlayToast) {
       return;
     }
@@ -1367,9 +1215,6 @@ export default function JobRunner() {
       setSelectingTrackId(null);
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
-      setOverlayFrames([]);
-      setOverlayFramesError(null);
-      setOverlayFramesLoading(false);
       setAnalysisTrackId(null);
       setAnalysisFrameKey(null);
       setAnalysisJob(null);
@@ -1443,58 +1288,6 @@ export default function JobRunner() {
   }, [showTargetSection, showManualPlayerFallback]);
 
   useEffect(() => {
-    if (!jobId || selectedTrackId) {
-      return;
-    }
-
-    let isMounted = true;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const pollIntervalMs = 3000;
-
-    const pollCandidates = async () => {
-      if (!isMounted) {
-        return;
-      }
-
-      setCandidatePolling(true);
-      try {
-        const { candidates, fallbackCandidates: fallbackList } =
-          await getJobTrackCandidates(jobId);
-        if (!isMounted) {
-          return;
-        }
-        setTrackCandidates(candidates);
-        setFallbackCandidates(fallbackList);
-        setShowSecondaryCandidates(false);
-        setShowAllCandidates(false);
-        setPlayerCandidateError(null);
-
-        if (candidates.length > 0 || fallbackList.length > 0) {
-          setCandidatePolling(false);
-          return;
-        }
-      } catch (fetchError) {
-        if (!isMounted) {
-          return;
-        }
-        setPlayerCandidateError(toErrorMessage(fetchError));
-      }
-
-      timeoutId = setTimeout(pollCandidates, pollIntervalMs);
-    };
-
-    pollCandidates();
-
-    return () => {
-      isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      setCandidatePolling(false);
-    };
-  }, [jobId, selectedTrackId]);
-
-  useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
       return;
     }
@@ -1509,7 +1302,7 @@ export default function JobRunner() {
 
     const poll = () => {
       setPreviewPollingActive(true);
-      listJobFrames(jobId)
+      getJobFrames(jobId, REQUIRED_FRAME_COUNT)
         .then(({ items }) => {
           if (!isMounted) {
             return;
@@ -1519,8 +1312,7 @@ export default function JobRunner() {
           }
 
           if (!framesFrozen) {
-            const mappedFrames = items.map(mapFrameItemToPreviewFrame);
-            setPreviewFrames(mappedFrames);
+            setPreviewFrames(items);
           }
           setPreviewError(null);
           setPreviewPollingError(null);
@@ -1749,38 +1541,6 @@ export default function JobRunner() {
     handleOpenPreview(resolvedTargetFrame, "target");
   };
 
-  const handleAnalyzeTrack = async (trackId: string, frameKey: string) => {
-    if (!jobId) {
-      return;
-    }
-    setAnalysisError(null);
-    setAnalysisRequesting(true);
-    setAnalysisTrackId(trackId);
-    setAnalysisFrameKey(frameKey);
-    setAnalysisJob(null);
-    setAnalysisPolling(false);
-    analysisSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-
-    try {
-      await analyzeJobPlayer(jobId, { trackId, frameKey });
-      setAnalysisRequesting(false);
-    } catch (analysisStartError) {
-      const errorCode =
-        analysisStartError && typeof analysisStartError === "object"
-          ? (analysisStartError as { code?: string }).code
-          : null;
-      if (errorCode === "INVALID_SELECTION") {
-        setOverlayToast(
-          "Selezione non valida (track non presente nel frame). Prova un altro frame."
-        );
-      } else {
-        setAnalysisError(toErrorMessage(analysisStartError));
-      }
-      setAnalysisRequesting(false);
-      setAnalysisPolling(false);
-    }
-  };
-
   const handlePickPlayer = async (trackId: string, frameKey: string | null) => {
     if (!jobId || !frameKey) {
       return;
@@ -1948,25 +1708,7 @@ export default function JobRunner() {
       return;
     }
     if (mode === "target") {
-      const overlayFrame =
-        overlayFrames.find((candidate) => candidate.key === frame.key) ?? null;
-      const track =
-        overlayFrame?.tracks?.find((candidate) => candidate.trackId === selectedTrackId) ??
-        null;
-      if (!track) {
-        setSelectionError(
-          "Selected player not visible in this frame. Choose another frame."
-        );
-        return;
-      }
-      const selection = buildTargetSelectionFromTrack(frame, track);
-      if (!selection) {
-        setSelectionError(
-          "Selected player not visible in this frame. Choose another frame."
-        );
-        return;
-      }
-      setDraftTargetSelection(selection);
+      setSelectionError(null);
     }
     setPreviewMode(mode);
     setFramesFrozen(true);
@@ -2408,23 +2150,11 @@ export default function JobRunner() {
   const targetMissingFrameKey = Boolean(
     draftTargetSelection && !getSelectionFrameKey(draftTargetSelection)
   );
-  const targetMissingTrackId = Boolean(
-    draftTargetSelection && !(draftTargetSelection.trackId ?? draftTargetSelection.track_id)
-  );
   const targetSelectionFrameKey =
     getSelectionFrameKey(draftTargetSelection) ?? selectedPreviewFrame?.key ?? null;
-  const targetOverlayFrame = useMemo(() => {
-    if (!targetSelectionFrameKey) {
-      return null;
-    }
-    return overlayFrames.find((frame) => frame.key === targetSelectionFrameKey) ?? null;
-  }, [overlayFrames, targetSelectionFrameKey]);
   const targetInvalidReason = useMemo(() => {
     if (!draftTargetSelection) {
       return null;
-    }
-    if (targetMissingTrackId) {
-      return "Select a player box.";
     }
     const bbox = {
       x: draftTargetSelection.x,
@@ -2435,19 +2165,8 @@ export default function JobRunner() {
     if (isBboxOutOfBounds(bbox) || isBboxTooSmallOrLarge(bbox)) {
       return "Select a player box.";
     }
-    const tracks = targetOverlayFrame?.tracks ?? [];
-    if (tracks.length === 0) {
-      return "Select a player box.";
-    }
-    const intersects = tracks.some((track) => {
-      const trackBbox = getTrackBBox(track);
-      if (!trackBbox) {
-        return false;
-      }
-      return calculateIoU(bbox, trackBbox) > 0;
-    });
-    return intersects ? null : "Select a player box.";
-  }, [draftTargetSelection, targetMissingTrackId, targetOverlayFrame]);
+    return null;
+  }, [draftTargetSelection]);
   const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
 
   return (
@@ -2629,18 +2348,9 @@ export default function JobRunner() {
                     Player selection
                   </p>
                   <p className="mt-2 text-sm text-slate-200">
-                    Use the overlay to pick the player track to follow.
+                    Use the frames below to draw a bounding box for the player.
                   </p>
                 </div>
-                {showPlayerSection ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowLegacyFlow((prev) => !prev)}
-                    className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                  >
-                    {showLegacyFlow ? "Hide advanced / legacy" : "Advanced / legacy"}
-                  </button>
-                ) : null}
               </div>
 
               {showPlayerSection ? (
@@ -2652,66 +2362,33 @@ export default function JobRunner() {
                           Overlay frames gallery
                         </p>
                         <p className="mt-1 text-sm text-slate-200">
-                          Click a bounding box to start the player analysis.
+                          Click a frame to draw a bounding box around the player.
                         </p>
                       </div>
-                      {analysisTrackId ? (
-                        <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                          Track #{analysisTrackId}
-                        </span>
-                      ) : null}
                     </div>
 
-                    {overlayFramesError ? (
+                    {previewError ? (
                       <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-                        {overlayFramesError}
-                      </div>
-                    ) : !overlayReady ? (
-                      <div className="flex items-center gap-2 text-sm text-slate-400">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                        <span>Calcolo giocatori in corso…</span>
+                        {previewError}
                       </div>
                     ) : null}
-                    {overlayFramesLoading && overlayFrames.length === 0 ? (
+                    {previewPollingActive && overlayGalleryFrames.length === 0 ? (
                       <div className="flex items-center gap-2 text-sm text-slate-400">
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                        <span>Loading overlay frames...</span>
+                        <span>Loading preview frames...</span>
                       </div>
-                    ) : overlayFramesError ? null : (
+                    ) : previewError ? null : (
                       <OverlayFramesGallery
                         frames={overlayGalleryFrames}
                         getFrameSrc={getPreviewFrameSrc}
-                        selectedTrackId={analysisTrackId}
-                        disabled={analysisRequesting || !overlayReady}
-                        overlayReady={overlayReady}
+                        disabled={analysisRequesting}
                         onFrameError={(frame) =>
                           handlePreviewFrameFallback(frame, "overlay-gallery")
                         }
-                        onPick={handleAnalyzeTrack}
+                        onSelectFrame={(frame) => handleOpenPreview(frame, "player-ref")}
                       />
                     )}
                   </div>
-
-                  {overlayReady && pickerFrame && (pickerFrame.tracks ?? []).length > 0 ? (
-                    <PlayerPicker
-                      frame={pickerFrame}
-                      frameSrc={pickerFrameSrc}
-                      selectedTrackId={selectedTrackId}
-                      disabled={Boolean(selectingTrackId) || !overlayReady}
-                      onFrameError={(frame) =>
-                        handlePreviewFrameFallback(frame, "player-picker")
-                      }
-                      onPick={(trackId) =>
-                        handlePickPlayer(trackId, pickerFrame.key)
-                      }
-                    />
-                  ) : (
-                    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
-                      {overlayReady
-                        ? "Nessun giocatore rilevato nei frame overlay."
-                        : "Calcolo giocatori in corso…"}
-                    </div>
-                  )}
 
                   {showLegacyFlow && selectedTrackId ? (
                     <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4">
@@ -3513,7 +3190,7 @@ export default function JobRunner() {
                         </div>
                       ) : (
                         <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                          No candidates available yet.
+                          Manual selection available. Pick a frame above to draw a box.
                         </div>
                       )}
                     </>
@@ -3524,7 +3201,7 @@ export default function JobRunner() {
                     </div>
                   ) : (
                     <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                      No candidates available yet.
+                      Manual selection available. Pick a frame above to draw a box.
                     </div>
                   )}
                 </div>
@@ -3625,7 +3302,7 @@ export default function JobRunner() {
                   <div className="space-y-2 text-sm text-slate-400">
                     <div className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Waiting for previews / tracking candidates…</span>
+                      <span>Waiting for previews…</span>
                     </div>
                     <p className="text-xs text-slate-500">
                       {`${framesProcessedCount} frames processed`}
@@ -3910,7 +3587,6 @@ export default function JobRunner() {
                     !draftTargetSelection ||
                     targetMissingTime ||
                     targetMissingFrameKey ||
-                    targetMissingTrackId ||
                     Boolean(targetInvalidReason)
                   }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -4158,7 +3834,6 @@ export default function JobRunner() {
                     !draftTargetSelection ||
                     targetMissingTime ||
                     targetMissingFrameKey ||
-                    targetMissingTrackId ||
                     Boolean(targetInvalidReason)
                   }
                   className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"

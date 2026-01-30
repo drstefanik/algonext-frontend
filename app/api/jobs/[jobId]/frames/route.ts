@@ -19,10 +19,8 @@ export async function GET(request: Request, { params }: RouteContext) {
     );
   }
 
-  const { searchParams } = new URL(request.url);
-  const count = searchParams.get("count");
-  const query = count ? `?count=${encodeURIComponent(count)}` : "";
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames${query}`;
+  const { search } = new URL(request.url);
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames${search}`;
 
   return forward(request, url, { methodOverride: "GET", includeBody: false });
 }
