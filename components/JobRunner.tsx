@@ -479,6 +479,11 @@ export default function JobRunner() {
   const [showSecondaryCandidates, setShowSecondaryCandidates] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [selectedFrameKey, setSelectedFrameKey] = useState<string | null>(null);
+  const [selectedFrameTimeSec, setSelectedFrameTimeSec] = useState<number | null>(
+    null
+  );
+  const [isManualTargetSelection, setIsManualTargetSelection] = useState(false);
   const [candidateReview, setCandidateReview] = useState<TrackCandidate | null>(
     null
   );
@@ -1193,6 +1198,14 @@ export default function JobRunner() {
     if (draftSelection) {
       setTargetSelection(draftSelection);
       setDraftTargetSelection(draftSelection);
+      const frameKey = getSelectionFrameKey(draftSelection);
+      const frameTime = getSelectionTimeSec(draftSelection);
+      if (frameKey) {
+        setSelectedFrameKey(frameKey);
+      }
+      if (frameTime != null) {
+        setSelectedFrameTimeSec(frameTime);
+      }
     }
   }, [jobTargetDraft, jobTargetSelection]);
 
@@ -1262,6 +1275,9 @@ export default function JobRunner() {
       setCandidatePolling(false);
       setPlayerCandidateError(null);
       setSelectedTrackId(null);
+      setSelectedFrameKey(null);
+      setSelectedFrameTimeSec(null);
+      setIsManualTargetSelection(false);
       setSelectingTrackId(null);
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
@@ -1494,6 +1510,9 @@ export default function JobRunner() {
       setShowSecondaryCandidates(false);
       setShowAllCandidates(false);
       setSelectedTrackId(null);
+      setSelectedFrameKey(null);
+      setSelectedFrameTimeSec(null);
+      setIsManualTargetSelection(false);
       setCandidateReview(null);
       setSelectingTrackId(null);
       setGridMode("player-ref");
@@ -1671,6 +1690,30 @@ export default function JobRunner() {
       setOverlayToast("Select a target box first");
       return;
     }
+    const frameKey =
+      selectedFrameKey ??
+      getSelectionFrameKey(draftTargetSelection) ??
+      selectedPreviewFrame?.key ??
+      null;
+    const frameTimeSec =
+      selectedFrameTimeSec ??
+      getSelectionTimeSec(draftTargetSelection) ??
+      selectedPreviewFrame?.timeSec ??
+      null;
+    if (!frameKey) {
+      setSelectionError("Frame missing frame_key.");
+      return;
+    }
+    if (frameTimeSec == null) {
+      setSelectionError("Frame missing time_sec.");
+      return;
+    }
+    const bbox = {
+      x: draftTargetSelection.x,
+      y: draftTargetSelection.y,
+      w: draftTargetSelection.w,
+      h: draftTargetSelection.h
+    };
     setSelectionError(null);
     setSelectionSuccess(null);
     setSelectionWarning(null);
@@ -1678,7 +1721,10 @@ export default function JobRunner() {
     setSavingSelection(true);
     try {
       await saveJobTargetSelection(jobId, {
-        selections,
+        frameKey,
+        timeSec: frameTimeSec,
+        trackId: isManualTargetSelection ? 0 : selectedTrackId ?? 0,
+        bbox,
         ...(force ? { force: true } : {})
       });
       const updatedJob = await getJob(jobId);
@@ -1767,6 +1813,8 @@ export default function JobRunner() {
     setPreviewMode(mode);
     setFramesFrozen(true);
     setSelectedPreviewFrame(frame);
+    setSelectedFrameKey(frame.key ?? null);
+    setSelectedFrameTimeSec(frame.timeSec ?? null);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
     setTargetAdjustState(null);
@@ -1895,6 +1943,8 @@ export default function JobRunner() {
       setSelectionError("Frame missing time_sec.");
       return;
     }
+    setSelectedFrameKey(frame.key ?? null);
+    setSelectedFrameTimeSec(frameTimeSec);
     setSelectionSuccess(null);
     setSelectionError(null);
     setDraftTargetSelection({
@@ -1976,6 +2026,7 @@ export default function JobRunner() {
           h: normalized.h
         });
       } else {
+        setIsManualTargetSelection(true);
         setTargetSelectionFromBBox(selectedPreviewFrame, normalized);
       }
     }
@@ -1991,6 +2042,8 @@ export default function JobRunner() {
       setSelectionError("Missing selection data for this track.");
       return;
     }
+    setSelectedTrackId(track.trackId);
+    setIsManualTargetSelection(false);
     setTargetSelectionFromBBox(selectedPreviewFrame, {
       x: clampNormalized(bbox.x),
       y: clampNormalized(bbox.y),
@@ -2175,6 +2228,9 @@ export default function JobRunner() {
     setShowSecondaryCandidates(false);
     setShowAllCandidates(false);
     setSelectedTrackId(null);
+    setSelectedFrameKey(null);
+    setSelectedFrameTimeSec(null);
+    setIsManualTargetSelection(false);
     setCandidateReview(null);
     setSelectingTrackId(null);
     setGridMode("player-ref");
