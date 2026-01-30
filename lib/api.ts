@@ -149,8 +149,8 @@ export type FrameSelection = {
 };
 
 export type TargetSelection = {
-  frameTimeSec: number | null;
   frame_time_sec?: number | null;
+  frameTimeSec?: number | null;
   frame_key?: string | null;
   frameKey?: string | null;
   trackId?: string | null;
@@ -1036,34 +1036,31 @@ export async function saveJobTargetSelection(
       selection.frameTimeSec ?? selection.frame_time_sec ?? selection.t ?? null;
     const frameKey = selection.frameKey ?? selection.frame_key ?? null;
     const trackId = selection.trackId ?? selection.track_id ?? null;
-    if (
-      !frameKey ||
-      !trackId ||
-      frameTimeSec === null ||
-      frameTimeSec === undefined
-    ) {
+    if (frameTimeSec === null || frameTimeSec === undefined) {
       const error = new Error(
-        "Target selection payload missing frame_key, track_id, or time."
+        "Target selection payload missing frame_time_sec."
       );
       (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
       throw error;
     }
-    const bbox = {
-      x: selection.x,
-      y: selection.y,
-      w: selection.w,
-      h: selection.h
-    };
     return {
-      frame_key: frameKey,
-      track_id: trackId,
-      time_sec: frameTimeSec,
       frame_time_sec: frameTimeSec,
-      bbox,
       x: selection.x,
       y: selection.y,
       w: selection.w,
-      h: selection.h
+      h: selection.h,
+      ...(frameKey ? { frame_key: frameKey } : {}),
+      ...(trackId ? { track_id: trackId } : {}),
+      ...(frameKey || trackId
+        ? {
+            bbox: {
+              x: selection.x,
+              y: selection.y,
+              w: selection.w,
+              h: selection.h
+            }
+          }
+        : {})
     };
   });
   const requestPayload = {
