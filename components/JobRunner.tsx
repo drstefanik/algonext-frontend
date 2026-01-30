@@ -494,6 +494,7 @@ export default function JobRunner() {
   const frameSrcCacheRef = useRef<Map<string, string>>(new Map());
   const [, setFrameSrcCacheVersion] = useState(0);
   const previewListRequestRef = useRef(0);
+  const previewNotReadyStartRef = useRef<number | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewModalRef = useRef<HTMLDivElement | null>(null);
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -509,12 +510,8 @@ export default function JobRunner() {
   const [analysisPolling, setAnalysisPolling] = useState(false);
   const [analysisRequesting, setAnalysisRequesting] = useState(false);
 
-  const resolvePreviewFrameUrl = (frame: PreviewFrame) => {
-    const filename = frame.key ? frame.key.split("/").pop() : null;
-    const proxyFrameUrl =
-      filename && jobId ? `/api/jobs/${jobId}/frames/${filename}` : "";
-    return proxyFrameUrl || (frame.signedUrl ?? frame.url ?? "");
-  };
+  const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
+    frame.signedUrl ?? "";
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -917,11 +914,21 @@ export default function JobRunner() {
     };
   };
 
-  const resolveFrameUrl = (url: string | null | undefined) =>
-    normalizeFrameUrl(url ?? "");
-
-  const buildFrameProxyUrl = (frameUrl: string) =>
-    `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
+  const resolveFrameUrl = (url: string | null | undefined) => {
+    const normalized = normalizeFrameUrl(url ?? "");
+    if (!normalized) {
+      return "";
+    }
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return normalized;
+      }
+    } catch {
+      return "";
+    }
+    return "";
+  };
 
   const getCachedFrameSrc = (
     cacheKey: string,
@@ -940,39 +947,6 @@ export default function JobRunner() {
     return frameUrl;
   };
 
-  const isFrameProxyCached = (
-    cacheKey: string,
-    rawUrl: string | null | undefined
-  ) => {
-    const frameUrl = resolveFrameUrl(rawUrl);
-    if (!frameUrl) {
-      return false;
-    }
-    const key = `${cacheKey}:${frameUrl}`;
-    const proxyUrl = buildFrameProxyUrl(frameUrl);
-    return frameSrcCacheRef.current.get(key) === proxyUrl;
-  };
-
-  const handleFrameProxyFallback = (
-    cacheKey: string,
-    rawUrl: string | null | undefined,
-    onFinalError?: () => void
-  ) => {
-    const frameUrl = resolveFrameUrl(rawUrl);
-    if (!frameUrl) {
-      onFinalError?.();
-      return;
-    }
-    const key = `${cacheKey}:${frameUrl}`;
-    const proxyUrl = buildFrameProxyUrl(frameUrl);
-    const cached = frameSrcCacheRef.current.get(key);
-    if (cached === proxyUrl) {
-      onFinalError?.();
-      return;
-    }
-    frameSrcCacheRef.current.set(key, proxyUrl);
-    setFrameSrcCacheVersion((prev) => prev + 1);
-  };
 
   const getPreviewFrameSrc = (frame: PreviewFrame) =>
     getCachedFrameSrc(`preview-${frame.key}`, resolvePreviewFrameUrl(frame));
@@ -1000,18 +974,13 @@ export default function JobRunner() {
   };
 
   const handlePreviewFrameFallback = (frame: PreviewFrame, context: string) => {
-    const frameUrl = resolvePreviewFrameUrl(frame);
-    if (isFrameProxyCached(`preview-${frame.key}`, frameUrl)) {
-      handlePreviewImageError(frame, context);
-      return;
-    }
-    handleFrameProxyFallback(`preview-${frame.key}`, frameUrl, () =>
-      handlePreviewImageError(frame, context)
-    );
+    handlePreviewImageError(frame, context);
   };
 
-  const handleCandidateFrameFallback = (cacheKey: string, frameUrl?: string | null) =>
-    handleFrameProxyFallback(cacheKey, frameUrl ?? null);
+  const handleCandidateFrameFallback = (
+    _cacheKey: string,
+    _frameUrl?: string | null
+  ) => undefined;
 
   const handlePreviewImageLoad = (frame: PreviewFrame) => {
     setPreviewImageErrors((prev) => {
@@ -1295,21 +1264,42 @@ export default function JobRunner() {
     let isMounted = true;
     const requestId = Date.now();
     previewListRequestRef.current = requestId;
+    previewNotReadyStartRef.current = null;
     let attempts = 0;
     const maxAttempts = 24;
     const intervalMs = 2500;
+    const notReadyTimeoutMs = 60_000;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const getNotReadyInterval = () => 800 + Math.floor(Math.random() * 401);
 
     const poll = () => {
       setPreviewPollingActive(true);
       getJobFrames(jobId, REQUIRED_FRAME_COUNT)
-        .then(({ items }) => {
+        .then(({ items, status }) => {
           if (!isMounted) {
             return;
           }
           if (previewListRequestRef.current !== requestId) {
             return;
           }
+
+          if (status === 409) {
+            if (!previewNotReadyStartRef.current) {
+              previewNotReadyStartRef.current = Date.now();
+            }
+            const elapsedMs = Date.now() - previewNotReadyStartRef.current;
+            if (elapsedMs >= notReadyTimeoutMs) {
+              setPreviewPollingError(
+                "Preview frames not ready yet. Please retry."
+              );
+              setPreviewPollingActive(false);
+              return;
+            }
+            timeoutId = setTimeout(poll, getNotReadyInterval());
+            return;
+          }
+
+          previewNotReadyStartRef.current = null;
 
           if (!framesFrozen) {
             setPreviewFrames(items);
@@ -1352,6 +1342,7 @@ export default function JobRunner() {
           const message = String(fetchError?.message || fetchError);
           setPreviewError(message);
           setPreviewPollingError(message);
+          previewNotReadyStartRef.current = null;
 
           attempts += 1;
           if (shouldPollFrameList && attempts < maxAttempts) {
@@ -1366,6 +1357,7 @@ export default function JobRunner() {
 
     return () => {
       isMounted = false;
+      previewNotReadyStartRef.current = null;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }

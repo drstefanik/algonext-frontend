@@ -934,6 +934,14 @@ export async function getJobFrames(jobId: string, count = 8) {
     }
   );
 
+  if (response.status === 409) {
+    return {
+      ok: false,
+      status: response.status,
+      items: []
+    };
+  }
+
   if (!response.ok) {
     await handleError(response);
   }
@@ -965,6 +973,7 @@ export async function getJobFrames(jobId: string, count = 8) {
 
   return {
     ok: true,
+    status: response.status,
     items
   };
 }
