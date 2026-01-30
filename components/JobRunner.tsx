@@ -44,6 +44,14 @@ const POLLING_TIMEOUT_MS = 12000;
 const REQUIRED_FRAME_COUNT = 8;
 const MIN_FRAMES = REQUIRED_FRAME_COUNT;
 
+type ImageLoadFailure = {
+  url: string;
+  status: number | null;
+  context: string;
+  key?: string | null;
+  occurredAt: string;
+};
+
 const FrameSelector = ({ children }: { children: ReactNode }) => <>{children}</>;
 
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
@@ -489,12 +497,14 @@ export default function JobRunner() {
   const [previewImageErrors, setPreviewImageErrors] = useState<Record<string, string>>(
     {}
   );
+  const [imageLoadFailures, setImageLoadFailures] = useState<ImageLoadFailure[]>(
+    []
+  );
   const [previewPollingActive, setPreviewPollingActive] = useState(false);
   const [previewPollingAttempt, setPreviewPollingAttempt] = useState(0);
   const frameSrcCacheRef = useRef<Map<string, string>>(new Map());
   const [, setFrameSrcCacheVersion] = useState(0);
   const previewListRequestRef = useRef(0);
-  const previewNotReadyStartRef = useRef<number | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewModalRef = useRef<HTMLDivElement | null>(null);
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -930,6 +940,30 @@ export default function JobRunner() {
     return "";
   };
 
+  const fetchImageStatus = async (url: string) => {
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        cache: "no-store"
+      });
+      return response.status;
+    } catch (error) {
+      console.warn("IMG_STATUS_HEAD_FAILED", { url, error });
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store"
+      });
+      return response.status;
+    } catch (error) {
+      console.warn("IMG_STATUS_GET_FAILED", { url, error });
+    }
+
+    return null;
+  };
+
   const getCachedFrameSrc = (
     cacheKey: string,
     rawUrl: string | null | undefined
@@ -961,12 +995,47 @@ export default function JobRunner() {
   const getCandidateSampleFrameSrc = (frameUrl: string | null | undefined) =>
     getCachedFrameSrc("candidate-sample", frameUrl);
 
+  const logImageFailure = async (
+    context: string,
+    url: string | null | undefined,
+    key?: string | null
+  ) => {
+    const resolvedUrl = resolveFrameUrl(url);
+    if (!resolvedUrl) {
+      return;
+    }
+    const status = await fetchImageStatus(resolvedUrl);
+    console.error("IMG_ONERROR", {
+      context,
+      key: key ?? null,
+      url: resolvedUrl,
+      status
+    });
+    setImageLoadFailures((prev) => {
+      const failureKey = `${context}:${resolvedUrl}`;
+      const next = [
+        {
+          url: resolvedUrl,
+          status,
+          context,
+          key: key ?? null,
+          occurredAt: new Date().toISOString()
+        },
+        ...prev.filter(
+          (item) => `${item.context}:${item.url}` !== failureKey
+        )
+      ];
+      return next.slice(0, 6);
+    });
+  };
+
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
     console.error("FRAME_IMG_ERROR", {
       context,
       key: frame.key,
       url: resolvePreviewFrameUrl(frame)
     });
+    void logImageFailure(context, resolvePreviewFrameUrl(frame), frame.key);
     setPreviewImageErrors((prev) => ({
       ...prev,
       [frame.key]: context
@@ -978,9 +1047,11 @@ export default function JobRunner() {
   };
 
   const handleCandidateFrameFallback = (
-    _cacheKey: string,
-    _frameUrl?: string | null
-  ) => undefined;
+    context: string,
+    frameUrl?: string | null
+  ) => {
+    void logImageFailure(context, frameUrl ?? null, null);
+  };
 
   const handlePreviewImageLoad = (frame: PreviewFrame) => {
     setPreviewImageErrors((prev) => {
@@ -1264,42 +1335,21 @@ export default function JobRunner() {
     let isMounted = true;
     const requestId = Date.now();
     previewListRequestRef.current = requestId;
-    previewNotReadyStartRef.current = null;
     let attempts = 0;
     const maxAttempts = 24;
     const intervalMs = 2500;
-    const notReadyTimeoutMs = 60_000;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const getNotReadyInterval = () => 800 + Math.floor(Math.random() * 401);
 
     const poll = () => {
       setPreviewPollingActive(true);
       getJobFrames(jobId, REQUIRED_FRAME_COUNT)
-        .then(({ items, status }) => {
+        .then(({ items }) => {
           if (!isMounted) {
             return;
           }
           if (previewListRequestRef.current !== requestId) {
             return;
           }
-
-          if (status === 409) {
-            if (!previewNotReadyStartRef.current) {
-              previewNotReadyStartRef.current = Date.now();
-            }
-            const elapsedMs = Date.now() - previewNotReadyStartRef.current;
-            if (elapsedMs >= notReadyTimeoutMs) {
-              setPreviewPollingError(
-                "Preview frames not ready yet. Please retry."
-              );
-              setPreviewPollingActive(false);
-              return;
-            }
-            timeoutId = setTimeout(poll, getNotReadyInterval());
-            return;
-          }
-
-          previewNotReadyStartRef.current = null;
 
           if (!framesFrozen) {
             setPreviewFrames(items);
@@ -1342,8 +1392,6 @@ export default function JobRunner() {
           const message = String(fetchError?.message || fetchError);
           setPreviewError(message);
           setPreviewPollingError(message);
-          previewNotReadyStartRef.current = null;
-
           attempts += 1;
           if (shouldPollFrameList && attempts < maxAttempts) {
             timeoutId = setTimeout(poll, intervalMs);
@@ -1357,7 +1405,6 @@ export default function JobRunner() {
 
     return () => {
       isMounted = false;
-      previewNotReadyStartRef.current = null;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
@@ -3206,8 +3253,25 @@ export default function JobRunner() {
           ) : null}
           {hasPreviewFrameErrors ? (
             <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-              Images blocked or failed to load. Check the frame proxy or mixed
-              content settings.
+              <p>
+                Images blocked or failed to load. Check the frame proxy or mixed
+                content settings.
+              </p>
+              {imageLoadFailures.length > 0 ? (
+                <div className="mt-2 space-y-1 text-[11px] text-amber-100">
+                  {imageLoadFailures.map((failure, index) => (
+                    <div key={`${failure.context}-${failure.url}-${index}`}>
+                      <span className="font-semibold">
+                        {failure.status !== null ? `HTTP ${failure.status}` : "HTTP ?"}
+                      </span>
+                      {` · ${failure.context}`}
+                      <div className="break-all text-amber-200/90">
+                        {failure.url}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {jobId ? (

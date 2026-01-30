@@ -926,56 +926,74 @@ export async function getJobStatus(jobId: string) {
 }
 
 export async function getJobFrames(jobId: string, count = 8) {
-  const response = await fetchWithTimeout(
-    `/api/jobs/${jobId}/frames?count=${count}`,
-    {
-      method: "GET",
-      cache: "no-store"
+  const timeoutMs = 60_000;
+  const startTime = Date.now();
+  const getRetryDelayMs = () => 800 + Math.floor(Math.random() * 701);
+  const wait = (delayMs: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+
+  while (true) {
+    const response = await fetchWithTimeout(
+      `/api/jobs/${jobId}/frames?count=${count}`,
+      {
+        method: "GET",
+        cache: "no-store"
+      }
+    );
+
+    if (response.status === 409) {
+      if (Date.now() - startTime >= timeoutMs) {
+        throw new Error("Preview frames not ready yet. Please retry.");
+      }
+      await wait(getRetryDelayMs());
+      continue;
     }
-  );
 
-  if (response.status === 409) {
-    return {
-      ok: false,
-      status: response.status,
-      items: []
-    };
+    if (!response.ok) {
+      await handleError(response);
+    }
+
+    const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
+      await response.json().catch(() => null)
+    );
+    const payloadRecord =
+      payload && !Array.isArray(payload) ? (payload as UnknownRecord) : null;
+    const dataSource =
+      payloadRecord && payloadRecord.data && typeof payloadRecord.data === "object"
+        ? (payloadRecord.data as UnknownRecord)
+        : null;
+    const itemsSource = Array.isArray(payload)
+      ? payload
+      : dataSource?.items ??
+        payloadRecord?.items ??
+        dataSource?.frames ??
+        payloadRecord?.frames ??
+        [];
+    const items = normalizeFrameListItems(itemsSource).map((item) => ({
+      timeSec: item.time_sec ?? null,
+      key: item.key,
+      signedUrl: item.url,
+      url: item.url,
+      width: item.width ?? null,
+      height: item.height ?? null
+    }));
+
+    if (items.length > 0) {
+      return {
+        ok: true,
+        status: response.status,
+        items
+      };
+    }
+
+    if (Date.now() - startTime >= timeoutMs) {
+      throw new Error("Preview frames not ready yet. Please retry.");
+    }
+
+    await wait(getRetryDelayMs());
   }
-
-  if (!response.ok) {
-    await handleError(response);
-  }
-
-  const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
-    await response.json().catch(() => null)
-  );
-  const payloadRecord =
-    payload && !Array.isArray(payload) ? (payload as UnknownRecord) : null;
-  const dataSource =
-    payloadRecord && payloadRecord.data && typeof payloadRecord.data === "object"
-      ? (payloadRecord.data as UnknownRecord)
-      : null;
-  const itemsSource = Array.isArray(payload)
-    ? payload
-    : dataSource?.items ??
-      payloadRecord?.items ??
-      dataSource?.frames ??
-      payloadRecord?.frames ??
-      [];
-  const items = normalizeFrameListItems(itemsSource).map((item) => ({
-    timeSec: item.time_sec ?? null,
-    key: item.key,
-    signedUrl: item.url,
-    url: item.url,
-    width: item.width ?? null,
-    height: item.height ?? null
-  }));
-
-  return {
-    ok: true,
-    status: response.status,
-    items
-  };
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
