@@ -80,11 +80,6 @@ export type PreviewFrameTrack = {
   h?: number | null;
 };
 
-export type OverlayFramesResponse = {
-  frames: PreviewFrame[];
-  overlayReady: boolean | null;
-};
-
 export type FrameItem = {
   name: string;
   url: string;
@@ -926,37 +921,6 @@ export async function getJob(jobId: string, trackId?: string | null) {
   return mapped;
 }
 
-export async function getJobOverlayFrames(jobId: string): Promise<OverlayFramesResponse> {
-  const response = await fetchWithTimeout(
-    `/api/jobs/${encodeURIComponent(jobId)}/frames/overlay?ts=${Date.now()}`,
-    {
-      method: "GET",
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    await handleError(response);
-  }
-
-  const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
-    await response.json().catch(() => null)
-  );
-  const overlayReadyRaw =
-    payload && !Array.isArray(payload)
-      ? ((payload as UnknownRecord).overlay_ready ??
-          (payload as UnknownRecord).overlayReady ??
-          null)
-      : null;
-  const framesSource = Array.isArray(payload)
-    ? payload
-    : payload?.frames ?? payload?.items ?? payload?.preview_frames ?? [];
-  return {
-    frames: normalizePreviewFrames(framesSource),
-    overlayReady: typeof overlayReadyRaw === "boolean" ? overlayReadyRaw : null
-  };
-}
-
 export async function getJobStatus(jobId: string) {
   return getJob(jobId);
 }
@@ -974,53 +938,35 @@ export async function getJobFrames(jobId: string, count = 8) {
     await handleError(response);
   }
 
-  const payload = unwrap<UnknownRecord | null>(
-    await response.json().catch(() => null)
-  );
-  const framesSource = payload?.frames ?? payload?.items ?? [];
-  const frames = Array.isArray(framesSource)
-    ? framesSource.map((frame) => {
-        const mapped = mapFrameListItem(frame as UnknownRecord);
-        return {
-          t: mapped.time_sec ?? 0,
-          url: mapped.url,
-          w: mapped.width ?? 0,
-          h: mapped.height ?? 0
-        };
-      })
-    : [];
-
-  return { frames };
-}
-
-export async function listJobFrames(jobId: string, count = 8) {
-  const response = await fetchWithTimeout(
-    `/api/jobs/${encodeURIComponent(jobId)}/frames?count=${count}`,
-    {
-      method: "GET",
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    await handleError(response);
-  }
-
   const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
     await response.json().catch(() => null)
   );
+  const payloadRecord =
+    payload && !Array.isArray(payload) ? (payload as UnknownRecord) : null;
+  const dataSource =
+    payloadRecord && payloadRecord.data && typeof payloadRecord.data === "object"
+      ? (payloadRecord.data as UnknownRecord)
+      : null;
   const itemsSource = Array.isArray(payload)
     ? payload
-    : payload?.frames ?? payload?.items ?? [];
+    : dataSource?.items ??
+      payloadRecord?.items ??
+      dataSource?.frames ??
+      payloadRecord?.frames ??
+      [];
+  const items = normalizeFrameListItems(itemsSource).map((item) => ({
+    timeSec: item.time_sec ?? null,
+    key: item.key,
+    signedUrl: item.url,
+    url: item.url,
+    width: item.width ?? null,
+    height: item.height ?? null
+  }));
 
   return {
     ok: true,
-    items: normalizeFrameListItems(itemsSource)
+    items
   };
-}
-
-export async function getJobFramesList(jobId: string) {
-  return listJobFrames(jobId);
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
