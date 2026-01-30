@@ -6,6 +6,7 @@ type OverlayFramesGalleryProps = {
   selectedTrackId?: string | null;
   disabled?: boolean;
   overlayReady?: boolean;
+  onFrameError?: (frame: PreviewFrame) => void;
   onPick: (trackId: string, frameKey: string) => void;
 };
 
@@ -59,6 +60,7 @@ export default function OverlayFramesGallery({
   selectedTrackId,
   disabled,
   overlayReady = true,
+  onFrameError,
   onPick
 }: OverlayFramesGalleryProps) {
   if (frames.length === 0) {
@@ -87,6 +89,7 @@ export default function OverlayFramesGallery({
                   alt={`Overlay frame ${frame.key}`}
                   className="h-48 w-full object-cover"
                   draggable={false}
+                  onError={() => onFrameError?.(frame)}
                 />
               ) : (
                 <div className="flex h-48 w-full items-center justify-center text-xs text-slate-400">
