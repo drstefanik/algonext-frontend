@@ -604,7 +604,7 @@ export default function JobRunner() {
     const publicFrameUrl = frame.key
       ? `https://s3.nextgroupintl.com/fnh/${frame.key}`
       : "";
-    return publicFrameUrl || frame.signedUrl ?? frame.url ?? "";
+    return publicFrameUrl || (frame.signedUrl ?? frame.url ?? "");
   };
 
   const pct = job?.progress?.pct ?? 0;
