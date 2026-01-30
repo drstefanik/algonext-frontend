@@ -6,6 +6,7 @@ type PlayerPickerProps = {
   frameSrc: string;
   selectedTrackId?: string | null;
   disabled?: boolean;
+  onFrameError?: (frame: PreviewFrame) => void;
   onPick: (trackId: string, frameKey: string) => void;
 };
 
@@ -33,6 +34,7 @@ export default function PlayerPicker({
   frameSrc,
   selectedTrackId,
   disabled,
+  onFrameError,
   onPick
 }: PlayerPickerProps) {
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -88,6 +90,7 @@ export default function PlayerPicker({
                 height: imageRef.current.clientHeight
               });
             }}
+            onError={() => onFrameError?.(frame)}
             draggable={false}
           />
         ) : (

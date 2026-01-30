@@ -582,6 +582,8 @@ export default function JobRunner() {
   );
   const [previewPollingActive, setPreviewPollingActive] = useState(false);
   const [previewPollingAttempt, setPreviewPollingAttempt] = useState(0);
+  const frameSrcCacheRef = useRef<Map<string, string>>(new Map());
+  const [, setFrameSrcCacheVersion] = useState(0);
   const previewListRequestRef = useRef(0);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewModalRef = useRef<HTMLDivElement | null>(null);
@@ -1011,13 +1013,65 @@ export default function JobRunner() {
     };
   };
 
-  const getPreviewFrameSrc = (frame: PreviewFrame) => {
-    const frameUrl = normalizeFrameUrl(resolvePreviewFrameUrl(frame));
+  const resolveFrameUrl = (url: string | null | undefined) =>
+    normalizeFrameUrl(url ?? "");
+
+  const buildFrameProxyUrl = (frameUrl: string) =>
+    `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
+
+  const getCachedFrameSrc = (
+    cacheKey: string,
+    rawUrl: string | null | undefined
+  ) => {
+    const frameUrl = resolveFrameUrl(rawUrl);
     if (!frameUrl) {
       return "";
     }
-    return `/api/frame-proxy?url=${encodeURIComponent(frameUrl)}`;
+    const key = `${cacheKey}:${frameUrl}`;
+    const cached = frameSrcCacheRef.current.get(key);
+    if (cached) {
+      return cached;
+    }
+    frameSrcCacheRef.current.set(key, frameUrl);
+    return frameUrl;
   };
+
+  const isFrameProxyCached = (
+    cacheKey: string,
+    rawUrl: string | null | undefined
+  ) => {
+    const frameUrl = resolveFrameUrl(rawUrl);
+    if (!frameUrl) {
+      return false;
+    }
+    const key = `${cacheKey}:${frameUrl}`;
+    const proxyUrl = buildFrameProxyUrl(frameUrl);
+    return frameSrcCacheRef.current.get(key) === proxyUrl;
+  };
+
+  const handleFrameProxyFallback = (
+    cacheKey: string,
+    rawUrl: string | null | undefined,
+    onFinalError?: () => void
+  ) => {
+    const frameUrl = resolveFrameUrl(rawUrl);
+    if (!frameUrl) {
+      onFinalError?.();
+      return;
+    }
+    const key = `${cacheKey}:${frameUrl}`;
+    const proxyUrl = buildFrameProxyUrl(frameUrl);
+    const cached = frameSrcCacheRef.current.get(key);
+    if (cached === proxyUrl) {
+      onFinalError?.();
+      return;
+    }
+    frameSrcCacheRef.current.set(key, proxyUrl);
+    setFrameSrcCacheVersion((prev) => prev + 1);
+  };
+
+  const getPreviewFrameSrc = (frame: PreviewFrame) =>
+    getCachedFrameSrc(`preview-${frame.key}`, resolvePreviewFrameUrl(frame));
 
   const pickerFrame =
     overlayFramesWithImages.find((frame) => (frame.tracks ?? []).length > 0) ??
@@ -1028,21 +1082,11 @@ export default function JobRunner() {
     ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
     : "";
 
-  const getCandidateThumbnailSrc = (candidate: TrackCandidate) => {
-    const thumbnailUrl = normalizeFrameUrl(candidate.thumbnailUrl ?? "");
-    if (!thumbnailUrl) {
-      return "";
-    }
-    return `/api/frame-proxy?url=${encodeURIComponent(thumbnailUrl)}`;
-  };
+  const getCandidateThumbnailSrc = (candidate: TrackCandidate) =>
+    getCachedFrameSrc(`candidate-${candidate.trackId}`, candidate.thumbnailUrl);
 
-  const getCandidateSampleFrameSrc = (frameUrl: string | null | undefined) => {
-    const normalizedFrameUrl = normalizeFrameUrl(frameUrl ?? "");
-    if (!normalizedFrameUrl) {
-      return "";
-    }
-    return `/api/frame-proxy?url=${encodeURIComponent(normalizedFrameUrl)}`;
-  };
+  const getCandidateSampleFrameSrc = (frameUrl: string | null | undefined) =>
+    getCachedFrameSrc("candidate-sample", frameUrl);
 
   const handlePreviewImageError = (frame: PreviewFrame, context: string) => {
     console.error("FRAME_IMG_ERROR", {
@@ -1055,6 +1099,20 @@ export default function JobRunner() {
       [frame.key]: context
     }));
   };
+
+  const handlePreviewFrameFallback = (frame: PreviewFrame, context: string) => {
+    const frameUrl = resolvePreviewFrameUrl(frame);
+    if (isFrameProxyCached(`preview-${frame.key}`, frameUrl)) {
+      handlePreviewImageError(frame, context);
+      return;
+    }
+    handleFrameProxyFallback(`preview-${frame.key}`, frameUrl, () =>
+      handlePreviewImageError(frame, context)
+    );
+  };
+
+  const handleCandidateFrameFallback = (cacheKey: string, frameUrl?: string | null) =>
+    handleFrameProxyFallback(cacheKey, frameUrl ?? null);
 
   const handlePreviewImageLoad = (frame: PreviewFrame) => {
     setPreviewImageErrors((prev) => {
@@ -1317,6 +1375,8 @@ export default function JobRunner() {
       previewListRequestRef.current = 0;
       pollStartRef.current = null;
       setPollingTimedOut(false);
+      frameSrcCacheRef.current.clear();
+      setFrameSrcCacheVersion((prev) => prev + 1);
       return;
     }
   }, [jobId]);
@@ -1324,6 +1384,8 @@ export default function JobRunner() {
   useEffect(() => {
     if (jobId) {
       setFramesFrozen(false);
+      frameSrcCacheRef.current.clear();
+      setFrameSrcCacheVersion((prev) => prev + 1);
     }
   }, [jobId]);
 
@@ -1437,8 +1499,8 @@ export default function JobRunner() {
     const requestId = Date.now();
     previewListRequestRef.current = requestId;
     let attempts = 0;
-    const maxAttempts = 30;
-    const intervalMs = 1500;
+    const maxAttempts = 24;
+    const intervalMs = 2500;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const poll = () => {
@@ -2618,6 +2680,9 @@ export default function JobRunner() {
                         selectedTrackId={analysisTrackId}
                         disabled={analysisRequesting || !overlayReady}
                         overlayReady={overlayReady}
+                        onFrameError={(frame) =>
+                          handlePreviewFrameFallback(frame, "overlay-gallery")
+                        }
                         onPick={handleAnalyzeTrack}
                       />
                     )}
@@ -2629,6 +2694,9 @@ export default function JobRunner() {
                       frameSrc={pickerFrameSrc}
                       selectedTrackId={selectedTrackId}
                       disabled={Boolean(selectingTrackId) || !overlayReady}
+                      onFrameError={(frame) =>
+                        handlePreviewFrameFallback(frame, "player-picker")
+                      }
                       onPick={(trackId) =>
                         handlePickPlayer(trackId, pickerFrame.key)
                       }
@@ -2663,6 +2731,14 @@ export default function JobRunner() {
                               src={selectedPreviewThumbnail}
                               alt="Selected player frame"
                               className="h-24 w-full object-cover"
+                              onError={() => {
+                                if (selectedPlayerPreviewFrame) {
+                                  handlePreviewFrameFallback(
+                                    selectedPlayerPreviewFrame,
+                                    "selected-preview"
+                                  );
+                                }
+                              }}
                             />
                           ) : (
                             <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
@@ -2687,6 +2763,12 @@ export default function JobRunner() {
                                   src={frameSrc}
                                   alt={`Selected sample ${index + 1}`}
                                   className="h-24 w-full object-cover"
+                                  onError={() =>
+                                    handleCandidateFrameFallback(
+                                      "candidate-sample",
+                                      frame.imageUrl
+                                    )
+                                  }
                                 />
                               ) : (
                                 <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
@@ -2852,6 +2934,12 @@ export default function JobRunner() {
                                                 src={thumbnailSrc}
                                                 alt={`Candidate ${candidate.trackId}`}
                                                 className="h-full w-full object-cover"
+                                                onError={() =>
+                                                  handleCandidateFrameFallback(
+                                                    `candidate-${candidate.trackId}`,
+                                                    candidate.thumbnailUrl
+                                                  )
+                                                }
                                               />
                                             ) : (
                                               <div className="flex h-full items-center justify-center text-xs text-slate-500">
@@ -2976,6 +3064,12 @@ export default function JobRunner() {
                                                 src={thumbnailSrc}
                                                 alt={`Candidate ${candidate.trackId}`}
                                                 className="h-full w-full object-cover"
+                                                onError={() =>
+                                                  handleCandidateFrameFallback(
+                                                    `candidate-${candidate.trackId}`,
+                                                    candidate.thumbnailUrl
+                                                  )
+                                                }
                                               />
                                             ) : (
                                               <div className="flex h-full items-center justify-center text-xs text-slate-500">
@@ -3100,6 +3194,12 @@ export default function JobRunner() {
                                                 src={thumbnailSrc}
                                                 alt={`Candidate ${candidate.trackId}`}
                                                 className="h-full w-full object-cover"
+                                                onError={() =>
+                                                  handleCandidateFrameFallback(
+                                                    `candidate-${candidate.trackId}`,
+                                                    candidate.thumbnailUrl
+                                                  )
+                                                }
                                               />
                                             ) : (
                                               <div className="flex h-full items-center justify-center text-xs text-slate-500">
@@ -3226,6 +3326,12 @@ export default function JobRunner() {
                                             src={thumbnailSrc}
                                             alt={`Candidate ${candidate.trackId}`}
                                             className="h-full w-full object-cover"
+                                            onError={() =>
+                                              handleCandidateFrameFallback(
+                                                `candidate-${candidate.trackId}`,
+                                                candidate.thumbnailUrl
+                                              )
+                                            }
                                           />
                                         ) : (
                                           <div className="flex h-full items-center justify-center text-xs text-slate-500">
@@ -3340,6 +3446,12 @@ export default function JobRunner() {
                                             src={frameSrc}
                                             alt={`Sample frame ${index + 1}`}
                                             className="h-28 w-full object-cover"
+                                            onError={() =>
+                                              handleCandidateFrameFallback(
+                                                "candidate-sample",
+                                                frame.imageUrl
+                                              )
+                                            }
                                           />
                                         ) : (
                                           <div className="flex h-28 items-center justify-center text-xs text-slate-500">
@@ -3463,7 +3575,7 @@ export default function JobRunner() {
                             alt={formatFrameAlt(frame.timeSec)}
                             className="h-32 w-full object-cover"
                             onLoad={() => handlePreviewImageLoad(frame)}
-                            onError={() => handlePreviewImageError(frame, "player-grid")}
+                            onError={() => handlePreviewFrameFallback(frame, "player-grid")}
                           />
                         )}
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
@@ -3904,7 +4016,7 @@ export default function JobRunner() {
                   draggable={false}
                   onLoad={() => handlePreviewImageLoad(selectedPreviewFrame)}
                   onError={() =>
-                    handlePreviewImageError(selectedPreviewFrame, "preview-modal")
+                    handlePreviewFrameFallback(selectedPreviewFrame, "preview-modal")
                   }
                 />
               )}
