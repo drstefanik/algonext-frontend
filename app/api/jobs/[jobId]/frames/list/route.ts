@@ -19,8 +19,11 @@ export async function GET(request: Request, { params }: RouteContext) {
     );
   }
 
-  const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
+  const { searchParams } = new URL(request.url);
+  const count = searchParams.get("count") ?? "8";
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames?count=${encodeURIComponent(
+    count
+  )}`;
 
   return forward(request, url, { methodOverride: "GET", includeBody: false });
 }

@@ -286,7 +286,9 @@ const mapPreviewFrameTrack = (track: UnknownRecord): PreviewFrameTrack => {
 };
 
 const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
-  const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
+  const timeSec = coerceNumber(
+    frame.timeSec ?? frame.time_sec ?? frame.timestamp ?? frame.t
+  );
   const key =
     frame.key ??
     frame.frame_key ??
@@ -348,8 +350,11 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
 };
 
 const mapFrameListItem = (frame: UnknownRecord): FrameItem => {
-  const timeSec = coerceNumber(frame.timeSec ?? frame.time_sec ?? frame.t);
-  const key = frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec ?? 0}`;
+  const timeSec = coerceNumber(
+    frame.timeSec ?? frame.time_sec ?? frame.timestamp ?? frame.t
+  );
+  const key =
+    frame.key ?? frame.frame_key ?? frame.s3_key ?? `frame-${timeSec ?? 0}`;
   const url =
     frame.signedUrl ??
     frame.signed_url ??
@@ -969,12 +974,28 @@ export async function getJobFrames(jobId: string, count = 8) {
     await handleError(response);
   }
 
-  return (await response.json()) as { frames: JobFrame[] };
+  const payload = unwrap<UnknownRecord | null>(
+    await response.json().catch(() => null)
+  );
+  const framesSource = payload?.frames ?? payload?.items ?? [];
+  const frames = Array.isArray(framesSource)
+    ? framesSource.map((frame) => {
+        const mapped = mapFrameListItem(frame as UnknownRecord);
+        return {
+          t: mapped.time_sec ?? 0,
+          url: mapped.url,
+          w: mapped.width ?? 0,
+          h: mapped.height ?? 0
+        };
+      })
+    : [];
+
+  return { frames };
 }
 
-export async function listJobFrames(jobId: string) {
+export async function listJobFrames(jobId: string, count = 8) {
   const response = await fetchWithTimeout(
-    `/api/jobs/${encodeURIComponent(jobId)}/frames/list?ts=${Date.now()}`,
+    `/api/jobs/${encodeURIComponent(jobId)}/frames?count=${count}`,
     {
       method: "GET",
       cache: "no-store"
@@ -990,7 +1011,7 @@ export async function listJobFrames(jobId: string) {
   );
   const itemsSource = Array.isArray(payload)
     ? payload
-    : payload?.items ?? payload?.frames ?? [];
+    : payload?.frames ?? payload?.items ?? [];
 
   return {
     ok: true,
@@ -1005,7 +1026,7 @@ export async function getJobFramesList(jobId: string) {
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
   const frameTimeSec = payload.frameTimeSec ?? payload.frame_time_sec ?? payload.t ?? null;
   if (frameTimeSec === null || frameTimeSec === undefined) {
-    throw new Error("Missing frame time from preview frame. Check /frames/list mapping.");
+    throw new Error("Missing frame time from preview frame. Check /frames mapping.");
   }
   const requestPayload = {
     frame_time_sec: frameTimeSec,
