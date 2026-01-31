@@ -1029,42 +1029,43 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
 
 export async function saveJobTargetSelection(
   jobId: string,
-  payload: { selections: TargetSelection[]; force?: boolean }
+  payload: {
+    frameKey: string | null;
+    timeSec: number | null;
+    trackId?: string | number | null;
+    bbox: { x: number; y: number; w: number; h: number };
+    force?: boolean;
+  }
 ) {
-  const selections = payload.selections.map((selection) => {
-    const frameTimeSec =
-      selection.frameTimeSec ?? selection.frame_time_sec ?? selection.t ?? null;
-    const frameKey = selection.frameKey ?? selection.frame_key ?? null;
-    const trackId = selection.trackId ?? selection.track_id ?? null;
-    if (frameTimeSec === null || frameTimeSec === undefined) {
-      const error = new Error(
-        "Target selection payload missing frame_time_sec."
-      );
-      (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
-      throw error;
-    }
-    return {
-      frame_time_sec: frameTimeSec,
-      x: selection.x,
-      y: selection.y,
-      w: selection.w,
-      h: selection.h,
-      ...(frameKey ? { frame_key: frameKey } : {}),
-      ...(trackId ? { track_id: trackId } : {}),
-      ...(frameKey || trackId
-        ? {
-            bbox: {
-              x: selection.x,
-              y: selection.y,
-              w: selection.w,
-              h: selection.h
-            }
-          }
-        : {})
-    };
-  });
+  const { frameKey, timeSec, trackId, bbox } = payload;
+  if (!frameKey) {
+    const error = new Error("Target selection payload missing frame_key.");
+    (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
+    throw error;
+  }
+  if (timeSec === null || timeSec === undefined) {
+    const error = new Error("Target selection payload missing time_sec.");
+    (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
+    throw error;
+  }
+  if (
+    bbox == null ||
+    [bbox.x, bbox.y, bbox.w, bbox.h].some((value) => value == null)
+  ) {
+    const error = new Error("Target selection payload missing bbox.");
+    (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
+    throw error;
+  }
   const requestPayload = {
-    selections,
+    frame_key: frameKey,
+    time_sec: timeSec,
+    track_id: trackId ?? 0,
+    bbox: {
+      x: bbox.x,
+      y: bbox.y,
+      w: bbox.w,
+      h: bbox.h
+    },
     ...(payload.force ? { force: true } : {})
   };
   console.info("[target] payload", requestPayload);
