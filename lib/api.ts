@@ -310,7 +310,7 @@ const mapPreviewFrame = (frame: UnknownRecord): PreviewFrame => {
     !signedUrl && !imageUrl && isPublic && bucket && key
       ? `https://${bucket}.s3.amazonaws.com/${key}`
       : null;
-  const url = imageUrl ?? publicUrl ?? signedUrl ?? "";
+  const url = signedUrl ?? imageUrl ?? publicUrl ?? "";
   const width = frame.width ?? frame.w ?? null;
   const height = frame.height ?? frame.h ?? null;
 
@@ -973,14 +973,16 @@ export async function getJobFrames(jobId: string, count = DEFAULT_FRAME_COUNT) {
         dataSource?.frames ??
         payloadRecord?.frames ??
         [];
-    const frames = normalizePreviewFrames(itemsSource); // usa mapPreviewFrame
-    const usable = frames.filter((f) => Boolean(f.url || f.signedUrl));
+    const frames = normalizePreviewFrames(itemsSource).map((frame) => ({
+      ...frame,
+      url: frame.signedUrl ?? frame.url ?? ""
+    })); // usa mapPreviewFrame
 
-    if (usable.length > 0) {
+    if (frames.length > 0) {
       return {
         ok: true,
         status: response.status,
-        items: usable
+        items: frames
       };
     }
 
