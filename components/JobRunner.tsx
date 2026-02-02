@@ -514,6 +514,7 @@ export default function JobRunner() {
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
   const [overlayGalleryFrames, setOverlayGalleryFrames] = useState<PreviewFrame[]>([]);
+  const [framesApiCount, setFramesApiCount] = useState<number | null>(null);
   const [showLegacyFlow] = useState(false);
   const [overlayToast, setOverlayToast] = useState<string | null>(null);
   const [framesFrozen, setFramesFrozen] = useState(false);
@@ -532,6 +533,7 @@ export default function JobRunner() {
   const frameSrcCacheRef = useRef<Map<string, string>>(new Map());
   const [, setFrameSrcCacheVersion] = useState(0);
   const previewListRequestRef = useRef(0);
+  const framesLogJobIdRef = useRef<string | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewModalRef = useRef<HTMLDivElement | null>(null);
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1213,6 +1215,21 @@ export default function JobRunner() {
   }, [jobId]);
 
   useEffect(() => {
+    if (!jobId || framesApiCount === null) {
+      return;
+    }
+    if (framesLogJobIdRef.current === jobId) {
+      return;
+    }
+    console.log("PREVIEW_FRAMES_API", {
+      jobId,
+      framesApiCount,
+      overlayGalleryFrames: overlayGalleryFrames.length
+    });
+    framesLogJobIdRef.current = jobId;
+  }, [jobId, framesApiCount, overlayGalleryFrames.length]);
+
+  useEffect(() => {
     if (!overlayToast) {
       return;
     }
@@ -1385,9 +1402,12 @@ export default function JobRunner() {
   useEffect(() => {
     if (!jobId) {
       setOverlayGalleryFrames([]);
+      setFramesApiCount(null);
       return;
     }
 
+    setOverlayGalleryFrames([]);
+    setFramesApiCount(null);
     let cancelled = false;
 
     (async () => {
@@ -1398,6 +1418,7 @@ export default function JobRunner() {
           return;
         }
         setOverlayGalleryFrames(res.items);
+        setFramesApiCount(res.items.length);
         if (res.items.length > 0) {
           setPreviewPollingActive(false);
         }
@@ -2535,6 +2556,7 @@ export default function JobRunner() {
               <span>Frames (list): {previewFrames.length}</span>
               <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
               <span>Frames (overlayGallery): {overlayGalleryFrames.length}</span>
+              <span>Frames (api items): {framesApiCount ?? 0}</span>
               <span>Frames error: {previewError || "—"}</span>
               <span>Image errors: {previewImageErrorCount}</span>
               <span>Warnings: {warningMessages.length}</span>
