@@ -973,20 +973,14 @@ export async function getJobFrames(jobId: string, count = DEFAULT_FRAME_COUNT) {
         dataSource?.frames ??
         payloadRecord?.frames ??
         [];
-    const items = normalizeFrameListItems(itemsSource).map((item) => ({
-      timeSec: item.time_sec ?? null,
-      key: item.key,
-      signedUrl: item.url,
-      url: item.url,
-      width: item.width ?? null,
-      height: item.height ?? null
-    }));
+    const frames = normalizePreviewFrames(itemsSource); // usa mapPreviewFrame
+    const usable = frames.filter((f) => Boolean(f.url || f.signedUrl));
 
-    if (items.length > 0) {
+    if (usable.length > 0) {
       return {
         ok: true,
         status: response.status,
-        items
+        items: usable
       };
     }
 
