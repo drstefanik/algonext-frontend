@@ -547,7 +547,7 @@ export default function JobRunner() {
   const [analysisRequesting, setAnalysisRequesting] = useState(false);
 
   const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
-    frame.signedUrl ?? "";
+    frame.url || frame.signedUrl || "";
 
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
@@ -2354,6 +2354,8 @@ export default function JobRunner() {
     return null;
   }, [draftTargetSelection]);
   const selectedFrameMissingTime = selectedPreviewFrame?.timeSec == null;
+
+  console.log("[frames]", previewFrames.length, previewFrames[0]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
