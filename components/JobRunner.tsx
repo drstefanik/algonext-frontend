@@ -513,6 +513,7 @@ export default function JobRunner() {
     useState<TargetAdjustState | null>(null);
   const [refreshingFrames, setRefreshingFrames] = useState(false);
   const [previewFrames, setPreviewFrames] = useState<PreviewFrame[]>([]);
+  const [overlayGalleryFrames, setOverlayGalleryFrames] = useState<PreviewFrame[]>([]);
   const [showLegacyFlow] = useState(false);
   const [overlayToast, setOverlayToast] = useState<string | null>(null);
   const [framesFrozen, setFramesFrozen] = useState(false);
@@ -604,7 +605,6 @@ export default function JobRunner() {
           return match?.tracks ? { ...frame, tracks: match.tracks } : frame;
         })
       : jobPreviewFrames;
-  const overlayGalleryFrames = previewFrames;
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -1027,7 +1027,7 @@ export default function JobRunner() {
 
 
   const getPreviewFrameSrc = (frame: PreviewFrame) =>
-    getCachedFrameSrc(`preview-${frame.key}`, resolvePreviewFrameUrl(frame));
+    getCachedFrameSrc(`preview-${frame.key}`, frame.url || frame.signedUrl || "");
 
   const selectedPreviewThumbnail = selectedPlayerPreviewFrame
     ? getPreviewFrameSrc(selectedPlayerPreviewFrame)
@@ -1381,6 +1381,38 @@ export default function JobRunner() {
       setGridMode("player-ref");
     }
   }, [showTargetSection, showManualPlayerFallback]);
+
+  useEffect(() => {
+    if (!jobId) {
+      setOverlayGalleryFrames([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setPreviewError(null);
+        const res = await getJobFrames(jobId, FRAME_COUNT);
+        if (cancelled) {
+          return;
+        }
+        setOverlayGalleryFrames(res.items);
+        if (res.items.length > 0) {
+          setPreviewPollingActive(false);
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setPreviewError(error instanceof Error ? error.message : "Preview error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
 
   useEffect(() => {
     if (!jobId || !shouldPollFrameList) {
@@ -2502,6 +2534,7 @@ export default function JobRunner() {
               <span>Frames (payload): {job?.previewFrames?.length ?? 0}</span>
               <span>Frames (list): {previewFrames.length}</span>
               <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
+              <span>Frames (overlayGallery): {overlayGalleryFrames.length}</span>
               <span>Frames error: {previewError || "—"}</span>
               <span>Image errors: {previewImageErrorCount}</span>
               <span>Warnings: {warningMessages.length}</span>
@@ -2560,7 +2593,9 @@ export default function JobRunner() {
                         {previewError}
                       </div>
                     ) : null}
-                    {previewPollingActive && overlayGalleryFrames.length === 0 ? (
+                    {previewPollingActive &&
+                    overlayGalleryFrames.length === 0 &&
+                    !previewError ? (
                       <div className="flex items-center gap-2 text-sm text-slate-400">
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
                         <span>Loading preview frames...</span>
