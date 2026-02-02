@@ -43,8 +43,9 @@ import {
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
-const REQUIRED_FRAME_COUNT = 8;
-const MIN_FRAMES = REQUIRED_FRAME_COUNT;
+const FRAME_COUNT = 16;
+const MIN_FRAME_COUNT = 8;
+const MAX_FRAME_COUNT = 32;
 
 type ImageLoadFailure = {
   url: string;
@@ -73,13 +74,31 @@ const isBboxTooSmallOrLarge = (bbox: { x: number; y: number; w: number; h: numbe
 const formatFrameTime = (timeSec: number | null) =>
   timeSec === null ? "—" : `${timeSec.toFixed(2)}s`;
 
-const formatFrameAlt = (timeSec: number | null) =>
-  timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
+  const formatFrameAlt = (timeSec: number | null) =>
+    timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
 
 const formatMetric = (value: number | null | undefined, suffix = "") =>
   value === null || value === undefined
     ? "—"
     : `${value.toFixed(2)}${suffix}`;
+
+const getClosestPreviewFrame = (frames: PreviewFrame[], timeSec: number) =>
+  frames.reduce<PreviewFrame | null>((closest, frame) => {
+    const frameTime = getSelectionTimeSec(frame);
+    if (frameTime == null) {
+      return closest;
+    }
+    if (!closest) {
+      return frame;
+    }
+    const closestTime = getSelectionTimeSec(closest);
+    if (closestTime == null) {
+      return frame;
+    }
+    return Math.abs(frameTime - timeSec) < Math.abs(closestTime - timeSec)
+      ? frame
+      : closest;
+  }, null);
 
 const normalizeCandidateTier = (candidate: TrackCandidate) => {
   if (!candidate.tier) {
@@ -570,6 +589,11 @@ export default function JobRunner() {
     analysisNormalizedStatus === "PROCESSING";
 
   const jobPreviewFrames = job?.previewFrames ?? [];
+  const requiredFrameCount = useMemo(() => {
+    const previewCount = jobPreviewFrames.length;
+    const desired = Math.max(MIN_FRAME_COUNT, previewCount || FRAME_COUNT);
+    return Math.min(MAX_FRAME_COUNT, desired);
+  }, [jobPreviewFrames.length]);
   const resolvedPreviewFrames =
     previewFrames.length > 0
       ? previewFrames.map((frame) => {
@@ -587,11 +611,16 @@ export default function JobRunner() {
   const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
   const hasPreviewImages = previewFramesWithImages.length > 0;
   const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
-  const hasFullPreviewSet = resolvedPreviewFrames.length >= REQUIRED_FRAME_COUNT;
+  const hasFullPreviewSet = resolvedPreviewFrames.length >= requiredFrameCount;
+  const previewGridClassName =
+    previewFramesWithImages.length > 8
+      ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      : "grid gap-3 sm:grid-cols-2";
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     hasAnyPreviewFrames && previewImageErrorCount > 0;
   const playerRef = job?.playerRef ?? null;
+  const playerRefTimeSec = playerRef?.t ?? playerRef?.frameTimeSec ?? null;
   const jobTargetSelection = job?.target?.selections?.[0] ?? null;
   const jobTargetDraftSource =
     job?.target &&
@@ -742,7 +771,7 @@ export default function JobRunner() {
     showPlayerSection &&
     (previewsReady || isCandidatesFailed) &&
     !selectedTrackId &&
-    ((isLowCoverageStatus && framesProcessedCount >= MIN_FRAMES) ||
+    ((isLowCoverageStatus && framesProcessedCount >= MIN_FRAME_COUNT) ||
       (autodetectLowCoverage && hasAutodetectErrorDetail) ||
       isCandidatesFailed);
   const manualFallbackMessage =
@@ -1368,7 +1397,7 @@ export default function JobRunner() {
 
     const poll = () => {
       setPreviewPollingActive(true);
-      getJobFrames(jobId, REQUIRED_FRAME_COUNT)
+      getJobFrames(jobId, requiredFrameCount)
         .then(({ items }) => {
           if (!isMounted) {
             return;
@@ -1383,7 +1412,7 @@ export default function JobRunner() {
           setPreviewError(null);
           setPreviewPollingError(null);
 
-          if (items.length >= REQUIRED_FRAME_COUNT) {
+          if (items.length >= requiredFrameCount) {
             setPreviewPollingActive(false);
             return;
           }
@@ -1391,7 +1420,7 @@ export default function JobRunner() {
           attempts += 1;
           if (
             shouldPollFrameList &&
-            items.length < REQUIRED_FRAME_COUNT &&
+            items.length < requiredFrameCount &&
             attempts < maxAttempts
           ) {
             timeoutId = setTimeout(poll, intervalMs);
@@ -1400,7 +1429,7 @@ export default function JobRunner() {
 
           if (
             shouldPollFrameList &&
-            items.length < REQUIRED_FRAME_COUNT &&
+            items.length < requiredFrameCount &&
             attempts >= maxAttempts
           ) {
             setPreviewPollingError("Preview polling timed out. Please retry.");
@@ -1439,7 +1468,8 @@ export default function JobRunner() {
     jobId,
     shouldPollFrameList,
     previewPollingAttempt,
-    framesFrozen
+    framesFrozen,
+    requiredFrameCount
   ]);
 
   useEffect(() => {
@@ -1606,7 +1636,7 @@ export default function JobRunner() {
       return;
     }
     setSelectionWarning(warning ?? null);
-    handleOpenPreview(resolvedTargetFrame, "target");
+    handleOpenPreview(resolvedTargetFrame, "target", selection);
   };
 
   const handlePickPlayer = async (trackId: string, frameKey: string | null) => {
@@ -1795,13 +1825,17 @@ export default function JobRunner() {
     await submitTargetSelection(false);
   };
 
-  const handleOpenPreview = (frame: PreviewFrame, mode: PreviewMode) => {
+  const handleOpenPreview = (
+    frame: PreviewFrame,
+    mode: PreviewMode,
+    selection?: TargetSelection | FrameSelection | null
+  ) => {
     if (mode === "target" && !hasPlayerRef) {
       setError("Select player first.");
       return;
     }
     if (!hasFullPreviewSet && !(isCandidatesFailed && hasAnyPreviewFrames)) {
-      setError("Wait for 8/8 preview frames.");
+      setError(`Wait for ${requiredFrameCount} preview frames.`);
       return;
     }
     if (mode === "target") {
@@ -1810,8 +1844,10 @@ export default function JobRunner() {
     setPreviewMode(mode);
     setFramesFrozen(true);
     setSelectedPreviewFrame(frame);
-    setSelectedFrameKey(frame.key ?? null);
-    setSelectedFrameTimeSec(frame.timeSec ?? null);
+    const selectionKey = selection ? getSelectionFrameKey(selection) : null;
+    const selectionTime = selection ? getSelectionTimeSec(selection) : null;
+    setSelectedFrameKey(selectionKey ?? frame.key ?? null);
+    setSelectedFrameTimeSec(selectionTime ?? frame.timeSec ?? null);
     setPlayerRefSelection(null);
     setPreviewDragState(null);
     setTargetAdjustState(null);
@@ -2263,11 +2299,34 @@ export default function JobRunner() {
       setSelectionWarning(warning);
     }
     if (resolvedTargetFrame) {
-      handleOpenPreview(resolvedTargetFrame, "target");
+      handleOpenPreview(resolvedTargetFrame, "target", selectionSource);
     } else {
       setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
     }
     setGridMode("target");
+    playerSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  };
+
+  const handleUsePlayerFrameForTarget = () => {
+    if (playerRefTimeSec == null) {
+      setSelectionError("Player reference missing time_sec.");
+      return;
+    }
+    const closestFrame = getClosestPreviewFrame(
+      previewFramesWithImages,
+      playerRefTimeSec
+    );
+    if (!closestFrame) {
+      setSelectionError("Preview frame not available yet.");
+      return;
+    }
+    setSelectionError(null);
+    setSelectionWarning(null);
+    setGridMode("target");
+    handleOpenPreview(closestFrame, "target");
     playerSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start"
@@ -3378,7 +3437,7 @@ export default function JobRunner() {
                     aggiungere signed_url/image_url.
                   </div>
                 ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className={previewGridClassName}>
                     {previewFramesWithImages.map((frame, index) => (
                       <button
                         key={`${frame.key}-${index}`}
@@ -3399,6 +3458,8 @@ export default function JobRunner() {
                             src={getPreviewFrameSrc(frame)}
                             alt={formatFrameAlt(frame.timeSec)}
                             className="h-32 w-full object-cover"
+                            loading="lazy"
+                            decoding="async"
                             onLoad={() => handlePreviewImageLoad(frame)}
                             onError={() => handlePreviewFrameFallback(frame, "player-grid")}
                           />
@@ -3722,6 +3783,16 @@ export default function JobRunner() {
               >
                 Select target from frames
               </button>
+              {playerRefTimeSec != null ? (
+                <button
+                  type="button"
+                  onClick={handleUsePlayerFrameForTarget}
+                  disabled={!hasAnyPreviewFrames}
+                  className="rounded-lg border border-emerald-400/40 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Use same frame as player
+                </button>
+              ) : null}
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"

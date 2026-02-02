@@ -925,7 +925,9 @@ export async function getJobStatus(jobId: string) {
   return getJob(jobId);
 }
 
-export async function getJobFrames(jobId: string, count = 8) {
+const DEFAULT_FRAME_COUNT = 16;
+
+export async function getJobFrames(jobId: string, count = DEFAULT_FRAME_COUNT) {
   const timeoutMs = 60_000;
   const startTime = Date.now();
   const getRetryDelayMs = () => 800 + Math.floor(Math.random() * 701);
