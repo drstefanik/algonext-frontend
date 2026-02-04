@@ -68,6 +68,7 @@ export type PreviewFrame = {
   width?: number | null;
   height?: number | null;
   tracks?: PreviewFrameTrack[];
+  targetCandidates?: PreviewFrameTrack[];
 };
 
 export type PreviewFrameTrack = {
