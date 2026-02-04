@@ -46,6 +46,7 @@ const POLLING_TIMEOUT_MS = 12000;
 const FRAME_COUNT = 16;
 const MIN_FRAME_COUNT = 8;
 const MAX_FRAME_COUNT = 32;
+const TARGET_SECONDARY_FALLBACK_LIMIT = 5;
 
 type ImageLoadFailure = {
   url: string;
@@ -115,6 +116,35 @@ const normalizeCandidateTier = (candidate: TrackCandidate) => {
     return "OTHER";
   }
   return "PRIMARY";
+};
+
+const normalizeTrackTier = (track: PreviewFrameTrack) => {
+  if (!track.tier) {
+    return "PRIMARY";
+  }
+  const normalized = track.tier.trim().toUpperCase();
+  if (normalized.includes("PRIMARY")) {
+    return "PRIMARY";
+  }
+  if (normalized.includes("SECONDARY")) {
+    return "SECONDARY";
+  }
+  return "PRIMARY";
+};
+
+const buildTargetCandidates = (tracks: PreviewFrameTrack[] = []) => {
+  const primary = tracks.filter((track) => normalizeTrackTier(track) === "PRIMARY");
+  if (primary.length > 0) {
+    return primary;
+  }
+  const secondary = tracks
+    .filter((track) => normalizeTrackTier(track) === "SECONDARY")
+    .sort(
+      (a, b) =>
+        (b.scoreHint ?? Number.NEGATIVE_INFINITY) -
+        (a.scoreHint ?? Number.NEGATIVE_INFINITY)
+    );
+  return secondary.slice(0, TARGET_SECONDARY_FALLBACK_LIMIT);
 };
 
 const formatPercent = (value: number | null | undefined) =>
@@ -597,6 +627,13 @@ export default function JobRunner() {
     const desired = Math.max(MIN_FRAME_COUNT, previewCount || FRAME_COUNT);
     return Math.min(MAX_FRAME_COUNT, desired);
   }, [jobPreviewFrames.length]);
+  const applyTargetCandidates = (frame: PreviewFrame) =>
+    gridMode === "target"
+      ? {
+          ...frame,
+          targetCandidates: buildTargetCandidates(frame.tracks ?? [])
+        }
+      : frame;
   const resolvedPreviewFrames =
     previewFrames.length > 0
       ? previewFrames.map((frame) => {
@@ -604,9 +641,10 @@ export default function JobRunner() {
             (jobFrame) =>
               getSelectionFrameKey(jobFrame) === getSelectionFrameKey(frame)
           );
-          return match?.tracks ? { ...frame, tracks: match.tracks } : frame;
+          const resolvedFrame = match?.tracks ? { ...frame, tracks: match.tracks } : frame;
+          return applyTargetCandidates(resolvedFrame);
         })
-      : jobPreviewFrames;
+      : jobPreviewFrames.map((frame) => applyTargetCandidates(frame));
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -892,6 +930,8 @@ export default function JobRunner() {
         height: Math.abs(previewDragState.currentY - previewDragState.startY)
       }
     : null;
+  const getTargetCandidatesForFrame = (frame: PreviewFrame | null) =>
+    frame ? frame.targetCandidates ?? buildTargetCandidates(frame.tracks ?? []) : [];
 
   const selectionMatchesFrame = (
     selection: TargetSelection | FrameSelection | null,
@@ -2340,21 +2380,32 @@ export default function JobRunner() {
     setSelectionWarning(null);
     const selectionSource =
       draftTargetSelection ?? jobTargetDraft ?? targetSelection ?? null;
-    if (!selectionSource) {
-      setSelectionError(
-        "Target draft mancante. Seleziona un player per generare il box."
-      );
-      return;
-    }
-    const { frame: resolvedTargetFrame, warning } =
-      resolveTargetPreviewFrame(selectionSource);
-    if (warning && resolvedTargetFrame) {
-      setSelectionWarning(warning);
-    }
-    if (resolvedTargetFrame) {
-      handleOpenPreview(resolvedTargetFrame, "target", selectionSource);
+    if (selectionSource) {
+      const { frame: resolvedTargetFrame, warning } =
+        resolveTargetPreviewFrame(selectionSource);
+      if (warning && resolvedTargetFrame) {
+        setSelectionWarning(warning);
+      }
+      if (resolvedTargetFrame) {
+        handleOpenPreview(resolvedTargetFrame, "target", selectionSource);
+      } else {
+        setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
+      }
     } else {
-      setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
+      const fallbackFrame =
+        previewFramesWithImages.find(
+          (frame) => getTargetCandidatesForFrame(frame).length > 0
+        ) ?? previewFramesWithImages[0] ?? null;
+      if (!fallbackFrame) {
+        setSelectionError(
+          "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
+        );
+        return;
+      }
+      handleOpenPreview(fallbackFrame, "target");
+      setSelectionWarning(
+        "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
+      );
     }
     setGridMode("target");
     playerSectionRef.current?.scrollIntoView({
@@ -3968,7 +4019,7 @@ export default function JobRunner() {
               )}
               <div className="absolute inset-0">
                 {previewMode === "target"
-                  ? selectedPreviewFrame.tracks?.map((track, index) => {
+                  ? getTargetCandidatesForFrame(selectedPreviewFrame).map((track, index) => {
                       const bbox = getSelectionBBox(track);
                       if (!bbox) {
                         return null;
