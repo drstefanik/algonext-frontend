@@ -43,7 +43,7 @@ import {
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
-const FRAME_COUNT = 16;
+const FRAME_COUNT = 32;
 const MIN_FRAME_COUNT = 8;
 const MAX_FRAME_COUNT = 32;
 const TARGET_SECONDARY_FALLBACK_LIMIT = 5;
@@ -645,6 +645,8 @@ export default function JobRunner() {
           return applyTargetCandidates(resolvedFrame);
         })
       : jobPreviewFrames.map((frame) => applyTargetCandidates(frame));
+  const targetGalleryFrames =
+    overlayGalleryFrames.length > 0 ? overlayGalleryFrames : resolvedPreviewFrames;
   const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
@@ -652,10 +654,6 @@ export default function JobRunner() {
   const hasPreviewImages = previewFramesWithImages.length > 0;
   const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
   const hasFullPreviewSet = resolvedPreviewFrames.length >= requiredFrameCount;
-  const previewGridClassName =
-    previewFramesWithImages.length > 8
-      ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-      : "grid gap-3 sm:grid-cols-2";
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     hasAnyPreviewFrames && previewImageErrorCount > 0;
@@ -818,8 +816,14 @@ export default function JobRunner() {
     autodetectLowCoverage && hasAutodetectErrorDetail
       ? errorDetail
       : "Autodetection coverage is low. Use the manual fallback below.";
+  const frameSelectorFrames =
+    gridMode === "target" ? targetGalleryFrames : previewFramesWithImages;
+  const previewGridClassName =
+    frameSelectorFrames.length > 8
+      ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      : "grid gap-3 sm:grid-cols-2";
   const canShowFrameSelector =
-    (showTargetSection && previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
+    (showTargetSection && frameSelectorFrames.length > 0) ||
     (showManualPlayerFallback &&
       ((previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
         (isCandidatesFailed && (hasPreviewImages || previewFramesMissingUrls))));
@@ -3548,7 +3552,7 @@ export default function JobRunner() {
                   </div>
                 ) : (
                   <div className={previewGridClassName}>
-                    {previewFramesWithImages.map((frame, index) => (
+                    {frameSelectorFrames.map((frame, index) => (
                       <button
                         key={`${frame.key}-${index}`}
                         type="button"
