@@ -822,8 +822,10 @@ export default function JobRunner() {
     frameSelectorFrames.length > 8
       ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       : "grid gap-3 sm:grid-cols-2";
+  const canShowTargetFrameSelector =
+    showTargetSection && frameSelectorFrames.length > 0;
   const canShowFrameSelector =
-    (showTargetSection && frameSelectorFrames.length > 0) ||
+    canShowTargetFrameSelector ||
     (showManualPlayerFallback &&
       ((previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
         (isCandidatesFailed && (hasPreviewImages || previewFramesMissingUrls))));
@@ -1931,7 +1933,12 @@ export default function JobRunner() {
       setError("Select player first.");
       return;
     }
-    if (!hasFullPreviewSet && !(isCandidatesFailed && hasAnyPreviewFrames)) {
+    const canBypassPreviewWait = mode === "target" && canShowTargetFrameSelector;
+    if (
+      !hasFullPreviewSet &&
+      !(isCandidatesFailed && hasAnyPreviewFrames) &&
+      !canBypassPreviewWait
+    ) {
       setError(`Wait for ${requiredFrameCount} preview frames.`);
       return;
     }
