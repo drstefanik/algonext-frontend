@@ -186,6 +186,8 @@ export type TrackCandidate = {
   coverage?: number | null;
   stability?: number | null;
   avgBoxArea?: number | null;
+  bestPreviewFrameKey?: string | null;
+  best_preview_frame_key?: string | null;
   thumbnailUrl?: string | null;
   tier?: string | null;
   frameTimeSec?: number | null;
@@ -1081,12 +1083,7 @@ export async function saveJobTargetSelection(
   }
 ) {
   const { frameKey, timeSec, trackId, bbox } = payload;
-  if (!frameKey) {
-    const error = new Error("Target selection payload missing frame_key.");
-    (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
-    throw error;
-  }
-  if (timeSec === null || timeSec === undefined) {
+  if (frameKey == null && (timeSec === null || timeSec === undefined)) {
     const error = new Error("Target selection payload missing time_sec.");
     (error as Error & { code?: string }).code = "INVALID_PAYLOAD";
     throw error;
@@ -1100,9 +1097,9 @@ export async function saveJobTargetSelection(
     throw error;
   }
   const requestPayload = {
-    frame_key: frameKey,
-    time_sec: timeSec,
-    track_id: trackId ?? 0,
+    ...(frameKey ? { frame_key: frameKey } : {}),
+    ...(frameKey ? {} : { frame_time_sec: timeSec }),
+    ...(trackId != null ? { track_id: trackId } : {}),
     bbox: {
       x: bbox.x,
       y: bbox.y,

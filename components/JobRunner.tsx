@@ -2014,17 +2014,16 @@ export default function JobRunner() {
       setOverlayToast("Select a target box first");
       return;
     }
-    const frameKey =
-      selectedFrameKey ?? getSelectionFrameKey(selection) ?? selectedPreviewFrame?.key ?? null;
+    const candidateBestPreviewFrameKey =
+      selectedCandidate?.bestPreviewFrameKey ??
+      selectedCandidate?.best_preview_frame_key ??
+      null;
+    const frameKey = candidateBestPreviewFrameKey ?? null;
     const frameTimeSec =
       selectedFrameTimeSec ??
       getSelectionTimeSec(selection) ??
       selectedPreviewFrame?.timeSec ??
       null;
-    if (!frameKey) {
-      setSelectionError("Frame missing frame_key.");
-      return;
-    }
     if (frameTimeSec == null) {
       setSelectionError("Frame missing time_sec.");
       return;
