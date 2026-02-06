@@ -43,9 +43,8 @@ import {
 
 const roles = ["Striker", "Winger", "Midfielder", "Defender", "Goalkeeper"];
 const POLLING_TIMEOUT_MS = 12000;
-const FRAME_COUNT = 32;
+const TARGET_FRAMES_COUNT = 32;
 const MIN_FRAME_COUNT = 8;
-const MAX_FRAME_COUNT = 32;
 const TARGET_SECONDARY_FALLBACK_LIMIT = 5;
 
 type ImageLoadFailure = {
@@ -424,7 +423,9 @@ const fetchJsonWithTimeout = async <T,>(input: RequestInfo | URL) => {
 
     if (!response.ok) {
       const message = await buildHttpErrorMessage(response);
-      throw new Error(message);
+      const error = new Error(message) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
     }
 
     const contentType = response.headers.get("content-type") ?? "";
@@ -622,11 +623,7 @@ export default function JobRunner() {
     analysisNormalizedStatus === "PROCESSING";
 
   const jobPreviewFrames = job?.previewFrames ?? [];
-  const requiredFrameCount = useMemo(() => {
-    const previewCount = jobPreviewFrames.length;
-    const desired = Math.max(MIN_FRAME_COUNT, previewCount || FRAME_COUNT);
-    return Math.min(MAX_FRAME_COUNT, desired);
-  }, [jobPreviewFrames.length]);
+  const requiredFrameCount = useMemo(() => TARGET_FRAMES_COUNT, []);
   const applyTargetCandidates = (frame: PreviewFrame) =>
     gridMode === "target"
       ? {
@@ -653,7 +650,6 @@ export default function JobRunner() {
   const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
   const hasPreviewImages = previewFramesWithImages.length > 0;
   const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
-  const hasFullPreviewSet = resolvedPreviewFrames.length >= requiredFrameCount;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
   const hasPreviewFrameErrors =
     hasAnyPreviewFrames && previewImageErrorCount > 0;
@@ -713,7 +709,7 @@ export default function JobRunner() {
     job?.result?.assets?.clips?.length ??
     0;
   const radarKeysCount = Object.keys(job?.result?.radar ?? {}).length;
-  const previewsReady = hasFullPreviewSet;
+  const previewsReady = hasAnyPreviewFrames;
   const isTargetStepReady =
     normalizedStep === "WAITING_FOR_TARGET" || hasTarget || targetConfirmed;
   const effectiveStep: "PLAYER" | "TARGET" | "PROCESSING" | "IDLE" = !jobId
@@ -792,7 +788,9 @@ export default function JobRunner() {
       candidatePolling ||
       autodetectEnabled);
   const showPlayerSection = effectiveStep === "PLAYER" || canShowPlayerCandidates;
-  const showTargetSection = effectiveStep === "TARGET" || isTargetStepReady;
+  const hasTargetFramesReady = hasPlayerRef && hasAnyPreviewFrames;
+  const showTargetSection =
+    effectiveStep === "TARGET" || isTargetStepReady || hasTargetFramesReady;
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
@@ -802,7 +800,11 @@ export default function JobRunner() {
     : "Ready";
   const shouldPollFrames =
     Boolean(jobId) &&
-    (isExtractingPreviews || isPreviewsReady || selectionReady);
+    (isExtractingPreviews ||
+      isPreviewsReady ||
+      hasAnyPreviewFrames ||
+      hasPlayerRef ||
+      selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
   const frameSelectorKey = jobId ?? "frame-selector";
   const showManualPlayerFallback =
@@ -1170,6 +1172,8 @@ export default function JobRunner() {
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let isMounted = true;
+    let backoffMs = 2000;
+    const maxBackoffMs = 8000;
 
     const getPollInterval = (step?: string | null) => {
       if (!step) {
@@ -1204,6 +1208,7 @@ export default function JobRunner() {
         const data = await fetchJsonWithTimeout<JobResponse>(`/api/jobs/${jobId}`);
         const normalizedJob = normalizeJob(data);
         setJob(normalizedJob);
+        backoffMs = 2000;
 
         if (
           normalizedJob.status === "COMPLETED" ||
@@ -1217,6 +1222,12 @@ export default function JobRunner() {
         const nextInterval = getPollInterval(normalizedJob.progress?.step ?? null);
         timeoutId = setTimeout(poll, nextInterval);
       } catch (pollError) {
+        const status = (pollError as { status?: number }).status;
+        if (status === 409) {
+          timeoutId = setTimeout(poll, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+          return;
+        }
         setError(toErrorMessage(pollError));
         setPolling(false);
       }
@@ -1457,7 +1468,7 @@ export default function JobRunner() {
     (async () => {
       try {
         setPreviewError(null);
-        const res = await getJobFrames(jobId, FRAME_COUNT);
+        const res = await getJobFrames(jobId, TARGET_FRAMES_COUNT);
         if (cancelled) {
           return;
         }
@@ -1505,7 +1516,9 @@ export default function JobRunner() {
 
           if (!framesFrozen) {
             setPreviewFrames(items);
+            setOverlayGalleryFrames(items);
           }
+          setFramesApiCount(items.length);
           setPreviewError(null);
           setPreviewPollingError(null);
 
@@ -1931,8 +1944,12 @@ export default function JobRunner() {
       setError("Select player first.");
       return;
     }
-    if (!hasFullPreviewSet && !(isCandidatesFailed && hasAnyPreviewFrames)) {
-      setError(`Wait for ${requiredFrameCount} preview frames.`);
+    if (!hasAnyPreviewFrames && !(isCandidatesFailed && hasAnyPreviewFrames)) {
+      const loadingMessage =
+        resolvedPreviewFrames.length > 0
+          ? `Loading frames (${resolvedPreviewFrames.length}/${TARGET_FRAMES_COUNT})…`
+          : "Preparing frames…";
+      setError(loadingMessage);
       return;
     }
     if (mode === "target") {
@@ -2675,7 +2692,7 @@ export default function JobRunner() {
                     !previewError ? (
                       <div className="flex items-center gap-2 text-sm text-slate-400">
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                        <span>Loading preview frames...</span>
+                        <span>Preparing frames...</span>
                       </div>
                     ) : previewError ? null : (
                       <OverlayFramesGallery
@@ -3544,6 +3561,13 @@ export default function JobRunner() {
                       ? "Manual fallback: click a frame to draw a bounding box around the player."
                       : "Click a preview frame to draw a bounding box around the target."}
                   </p>
+                  {gridMode === "target" &&
+                  previewPollingActive &&
+                  frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
+                    <span className="text-xs text-slate-500">
+                      {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
+                    </span>
+                  ) : null}
                 </div>
                 {previewFramesMissingUrls ? (
                   <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
@@ -3621,7 +3645,7 @@ export default function JobRunner() {
                   <div className="space-y-2 text-sm text-slate-400">
                     <div className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Waiting for previews…</span>
+                      <span>Preparing frames...</span>
                     </div>
                     <p className="text-xs text-slate-500">
                       {`${framesProcessedCount} frames processed`}
@@ -3631,11 +3655,7 @@ export default function JobRunner() {
                   <>
                     <div className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>
-                        {previewPollingActive
-                          ? "Preview frames are loading."
-                          : "Waiting for previews."}
-                      </span>
+                      <span>Preparing frames...</span>
                     </div>
                     {previewPollingError ? (
                       <p className="text-xs text-rose-200">{previewPollingError}</p>
