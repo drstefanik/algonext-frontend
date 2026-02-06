@@ -4,6 +4,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const API_BASE_URL = process.env.API_BASE_URL;
+
 type RouteContext = {
   params: {
     jobId: string;
@@ -11,16 +13,15 @@ type RouteContext = {
 };
 
 export async function GET(request: Request, { params }: RouteContext) {
-  const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
-  if (!base) {
-    return new Response("API_BASE_URL missing", {
+  if (!API_BASE_URL) {
+    return new Response("Missing API_BASE_URL environment variable.", {
       status: 500,
-      headers: { "content-type": "text/plain; charset=utf-8" }
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
     });
   }
 
   const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
+  const url = `${API_BASE_URL}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
 
-  return forward(request, url, { methodOverride: "GET", includeBody: false });
+  return forward(request, url);
 }
