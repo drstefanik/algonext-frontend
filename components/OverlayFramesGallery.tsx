@@ -1,4 +1,5 @@
 import type { PreviewFrame } from "@/lib/api";
+import { getSelectionBBox } from "@/lib/selection";
 
 type OverlayFramesGalleryProps = {
   frames: PreviewFrame[];
@@ -34,6 +35,8 @@ export default function OverlayFramesGallery({
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {frames.map((frame, index) => {
         const frameSrc = getFrameSrc(frame);
+        const candidateTrack = frame.tracks?.[0] ?? null;
+        const bbox = candidateTrack ? getSelectionBBox(candidateTrack) : null;
         return (
           <button
             key={`${frame.key}-${index}`}
@@ -60,6 +63,17 @@ export default function OverlayFramesGallery({
                   Preview frame unavailable
                 </div>
               )}
+              {bbox ? (
+                <div
+                  className="pointer-events-none absolute rounded border border-emerald-300 bg-emerald-400/20"
+                  style={{
+                    left: `${bbox.x * 100}%`,
+                    top: `${bbox.y * 100}%`,
+                    width: `${bbox.w * 100}%`,
+                    height: `${bbox.h * 100}%`
+                  }}
+                />
+              ) : null}
             </div>
 
             <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-400">
@@ -67,7 +81,7 @@ export default function OverlayFramesGallery({
                 t={formatFrameTime(frame.timeSec)}
               </span>
               <span className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
-                Draw box
+                Select candidate
               </span>
             </div>
           </button>
