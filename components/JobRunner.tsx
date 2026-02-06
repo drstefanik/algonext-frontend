@@ -788,7 +788,9 @@ export default function JobRunner() {
       candidatePolling ||
       autodetectEnabled);
   const showPlayerSection = effectiveStep === "PLAYER" || canShowPlayerCandidates;
-  const showTargetSection = effectiveStep === "TARGET" || isTargetStepReady;
+  const hasTargetFramesReady = hasPlayerRef && hasAnyPreviewFrames;
+  const showTargetSection =
+    effectiveStep === "TARGET" || isTargetStepReady || hasTargetFramesReady;
   const selectionReady = previewsReady && (showPlayerSection || showTargetSection);
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
@@ -798,7 +800,11 @@ export default function JobRunner() {
     : "Ready";
   const shouldPollFrames =
     Boolean(jobId) &&
-    (isExtractingPreviews || isPreviewsReady || selectionReady);
+    (isExtractingPreviews ||
+      isPreviewsReady ||
+      hasAnyPreviewFrames ||
+      hasPlayerRef ||
+      selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
   const frameSelectorKey = jobId ?? "frame-selector";
   const showManualPlayerFallback =
@@ -1940,9 +1946,9 @@ export default function JobRunner() {
     }
     if (!hasAnyPreviewFrames && !(isCandidatesFailed && hasAnyPreviewFrames)) {
       const loadingMessage =
-        mode === "target"
-          ? `Loading target frames (${resolvedPreviewFrames.length}/${TARGET_FRAMES_COUNT})…`
-          : "Loading preview frames…";
+        resolvedPreviewFrames.length > 0
+          ? `Loading frames (${resolvedPreviewFrames.length}/${TARGET_FRAMES_COUNT})…`
+          : "Preparing frames…";
       setError(loadingMessage);
       return;
     }
@@ -2686,7 +2692,7 @@ export default function JobRunner() {
                     !previewError ? (
                       <div className="flex items-center gap-2 text-sm text-slate-400">
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                        <span>Loading preview frames...</span>
+                        <span>Preparing frames...</span>
                       </div>
                     ) : previewError ? null : (
                       <OverlayFramesGallery
@@ -3559,7 +3565,7 @@ export default function JobRunner() {
                   previewPollingActive &&
                   frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
                     <span className="text-xs text-slate-500">
-                      {`Loading target frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
+                      {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
                     </span>
                   ) : null}
                 </div>
@@ -3639,7 +3645,7 @@ export default function JobRunner() {
                   <div className="space-y-2 text-sm text-slate-400">
                     <div className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Waiting for previews…</span>
+                      <span>Preparing frames...</span>
                     </div>
                     <p className="text-xs text-slate-500">
                       {`${framesProcessedCount} frames processed`}
@@ -3649,11 +3655,7 @@ export default function JobRunner() {
                   <>
                     <div className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>
-                        {previewPollingActive
-                          ? "Preview frames are loading."
-                          : "Waiting for previews."}
-                      </span>
+                      <span>Preparing frames...</span>
                     </div>
                     {previewPollingError ? (
                       <p className="text-xs text-rose-200">{previewPollingError}</p>

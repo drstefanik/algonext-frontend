@@ -931,7 +931,13 @@ const TARGET_FRAMES_COUNT = 32;
 export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
   const timeoutMs = 60_000;
   const startTime = Date.now();
-  const getRetryDelayMs = () => 800 + Math.floor(Math.random() * 701);
+  const retryDelaysMs = [2000, 3000, 5000];
+  let retryIndex = 0;
+  const getRetryDelayMs = () => {
+    const delay = retryDelaysMs[Math.min(retryIndex, retryDelaysMs.length - 1)];
+    retryIndex += 1;
+    return delay;
+  };
   const wait = (delayMs: number) =>
     new Promise<void>((resolve) => {
       setTimeout(resolve, delayMs);
