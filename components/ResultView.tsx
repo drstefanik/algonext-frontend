@@ -8,6 +8,32 @@ const formatScore = (value?: number) => {
   return value.toFixed(1);
 };
 
+const resolveStringField = (...values: Array<unknown>) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const resolveMetricValue = (source: Record<string, unknown> | null, keys: string[]) => {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : value;
+    }
+  }
+  return null;
+};
+
 export default function ResultView({ job }: { job: JobResponse }) {
   const result = job.result ?? null;
   const summary = result?.summary ?? null;
@@ -51,6 +77,61 @@ export default function ResultView({ job }: { job: JobResponse }) {
   const overallWarning = overallScoreUnavailable ? warningMessages[0] : null;
   const roleScoreUnavailable = roleScore == null;
   const clipExtractionFailed = warningCodes.includes("CLIP_EXTRACTION_FAILED");
+  const scoreExplanation =
+    resolveStringField(
+      result?.scoreExplanation,
+      result?.score_explanation,
+      result?.score_detail,
+      result?.scoreDetail,
+      result?.explanation,
+      summaryRecord?.scoreExplanation,
+      summaryRecord?.score_explanation
+    ) ??
+    "Tracking + eventi + normalizzazione per ruolo + pesi.";
+  const metricsSource =
+    (result?.metrics as Record<string, unknown> | undefined) ??
+    (result?.raw_metrics as Record<string, unknown> | undefined) ??
+    (result?.rawMetrics as Record<string, unknown> | undefined) ??
+    (result?.evidence as Record<string, unknown> | undefined) ??
+    null;
+  const evidenceMetrics = [
+    {
+      label: "Distance covered",
+      value: resolveMetricValue(metricsSource, [
+        "distance_covered",
+        "distanceCovered",
+        "distance",
+        "distance_km",
+        "distanceKm"
+      ])
+    },
+    {
+      label: "Top speed",
+      value: resolveMetricValue(metricsSource, [
+        "top_speed",
+        "topSpeed",
+        "max_speed",
+        "maxSpeed"
+      ])
+    },
+    {
+      label: "Successful actions",
+      value: resolveMetricValue(metricsSource, [
+        "successful_actions",
+        "successfulActions",
+        "success_count",
+        "successCount"
+      ])
+    }
+  ].filter((metric) => metric.value !== null);
+  const trackingUrl =
+    resolveStringField(
+      result?.trackingJsonUrl,
+      result?.tracking_json_url,
+      (result?.assets as { trackingJsonUrl?: string })?.trackingJsonUrl,
+      (result?.assets as { tracking_json_url?: string })?.tracking_json_url,
+      (result?.assets as { tracking_url?: string })?.tracking_url
+    ) ?? null;
 
   return (
     <div className="mt-6 space-y-6">
@@ -137,6 +218,95 @@ export default function ResultView({ job }: { job: JobResponse }) {
             ))}
           </dl>
         )}
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+        <h4 className="text-lg font-semibold text-white">
+          How this score is computed
+        </h4>
+        <p className="mt-2 text-sm text-slate-300">{scoreExplanation}</p>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+        <h4 className="text-lg font-semibold text-white">Evidence</h4>
+        <div className="mt-3 space-y-4 text-sm text-slate-300">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Tracking data
+            </p>
+            {trackingUrl ? (
+              <a
+                href={trackingUrl}
+                className="mt-2 inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-300"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download tracking.json
+              </a>
+            ) : (
+              <p className="mt-2 text-slate-400">Tracking JSON available soon.</p>
+            )}
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Metrics
+            </p>
+            {evidenceMetrics.length > 0 ? (
+              <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                {evidenceMetrics.map((metric) => (
+                  <li
+                    key={metric.label}
+                    className="rounded-lg border border-slate-800 bg-slate-950 p-3"
+                  >
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      {metric.label}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">
+                      {typeof metric.value === "number"
+                        ? formatScore(metric.value)
+                        : metric.value}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-slate-400">Metrics available soon.</p>
+            )}
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Clips & assets
+            </p>
+            {clips.length === 0 ? (
+              <p className="mt-2 text-slate-400">
+                {clipExtractionFailed
+                  ? "Clip extraction failed."
+                  : "Clips unavailable for this analysis."}
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {clips.map((clip, index) => (
+                  <li key={`${clip.signedUrl ?? "clip"}-${index}`}>
+                    {clip.signedUrl ? (
+                      <a
+                        href={clip.signedUrl}
+                        className="text-emerald-400 hover:text-emerald-300"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Clip {index + 1} ({clip.start ?? "?"}s-{clip.end ?? "?"}s)
+                      </a>
+                    ) : (
+                      <span className="text-slate-400">Clip link unavailable.</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">

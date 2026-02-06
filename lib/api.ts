@@ -945,7 +945,7 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
 
   while (true) {
     const response = await fetchWithTimeout(
-      `/api/jobs/${jobId}/frames?count=${count}`,
+      `/api/jobs/${jobId}/frames/list?count=${count}`,
       {
         method: "GET",
         cache: "no-store"
@@ -964,22 +964,18 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
       await handleError(response);
     }
 
-    const payload = unwrap<UnknownRecord | UnknownRecord[] | null>(
+    const payload = unwrap<UnknownRecord | null>(
       await response.json().catch(() => null)
     );
-    const payloadRecord =
-      payload && !Array.isArray(payload) ? (payload as UnknownRecord) : null;
-    const dataSource =
-      payloadRecord && payloadRecord.data && typeof payloadRecord.data === "object"
+    const payloadRecord = payload && typeof payload === "object" ? payload : null;
+    const dataRecord =
+      payloadRecord && typeof payloadRecord.data === "object"
         ? (payloadRecord.data as UnknownRecord)
         : null;
-    const itemsSource = Array.isArray(payload)
-      ? payload
-      : dataSource?.items ??
-        payloadRecord?.items ??
-        dataSource?.frames ??
-        payloadRecord?.frames ??
-        [];
+    const itemsSource =
+      dataRecord?.items ??
+      payloadRecord?.items ??
+      [];
     const frames = normalizePreviewFrames(itemsSource).map((frame) => ({
       ...frame,
       url: frame.signedUrl ?? frame.url ?? ""
