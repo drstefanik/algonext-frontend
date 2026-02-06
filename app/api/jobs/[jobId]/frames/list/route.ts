@@ -23,5 +23,8 @@ export async function GET(request: Request, { params }: RouteContext) {
   const { search } = new URL(request.url);
   const url = `${API_BASE_URL}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
 
-  return forward(request, url);
+  return forward(request, url, {
+    methodOverride: "GET",
+    includeBody: false,
+  });
 }
