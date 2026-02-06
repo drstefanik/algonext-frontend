@@ -10,7 +10,7 @@ type RouteContext = {
   };
 };
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function POST(request: Request, { params }: RouteContext) {
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {
@@ -19,8 +19,6 @@ export async function GET(request: Request, { params }: RouteContext) {
     });
   }
 
-  const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/frames/list${search}`;
-
-  return forward(request, url, { methodOverride: "GET", includeBody: false });
+  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}/selection`;
+  return forward(request, url);
 }

@@ -22,20 +22,17 @@ const logApiBaseUrlHost = (value: string) => {
 export async function POST(request: Request) {
   try {
     if (!API_BASE_URL) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Missing API_BASE_URL environment variable." }),
-        { status: 500, headers: { "content-type": "application/json", "cache-control": "no-store" } }
-      );
+      return new Response("Missing API_BASE_URL environment variable.", {
+        status: 500,
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+      });
     }
 
     if (!API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://")) {
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error: "Invalid API_BASE_URL. It must start with http:// or https://."
-        }),
-        { status: 500, headers: { "content-type": "application/json", "cache-control": "no-store" } }
-      );
+      return new Response("Invalid API_BASE_URL. It must start with http:// or https://.", {
+        status: 500,
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+      });
     }
 
     logApiBaseUrlHost(API_BASE_URL);
@@ -43,9 +40,9 @@ export async function POST(request: Request) {
     return forward(request, `${API_BASE_URL}/jobs`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    return new Response(JSON.stringify({ ok: false, error: `Route error: ${msg}` }), {
+    return new Response(`Route error: ${msg}`, {
       status: 500,
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
     });
   }
 }

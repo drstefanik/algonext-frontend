@@ -82,6 +82,14 @@ const formatMetric = (value: number | null | undefined, suffix = "") =>
     ? "—"
     : `${value.toFixed(2)}${suffix}`;
 
+const formatProgressPercent = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
+  }
+  const normalized = value > 1 ? value : value * 100;
+  return `${Math.round(normalized)}%`;
+};
+
 const getClosestPreviewFrame = (frames: PreviewFrame[], timeSec: number) =>
   frames.reduce<PreviewFrame | null>((closest, frame) => {
     const frameTime = getSelectionTimeSec(frame);
@@ -572,6 +580,7 @@ export default function JobRunner() {
   const playerSectionRef = useRef<HTMLElement | null>(null);
   const analysisSectionRef = useRef<HTMLElement | null>(null);
   const pollStartRef = useRef<number | null>(null);
+  const analysisPollStartRef = useRef<number | null>(null);
 
   const [analysisTrackId, setAnalysisTrackId] = useState<string | null>(null);
   const [analysisFrameKey, setAnalysisFrameKey] = useState<string | null>(null);
@@ -806,6 +815,34 @@ export default function JobRunner() {
       hasPlayerRef ||
       selectionReady);
   const shouldPollFrameList = shouldPollFrames && !framesFrozen;
+  const isLoadingFrames =
+    Boolean(jobId) &&
+    shouldPollFrameList &&
+    !hasAnyPreviewFrames &&
+    !previewPollingError &&
+    !previewError;
+  const progressLabel = formatProgressPercent(pct) ?? "0%";
+  const demoStatusLabel = (() => {
+    if (isLoadingFrames) {
+      return "Loading frames";
+    }
+    if (effectiveStep === "PLAYER") {
+      return "Select player";
+    }
+    if (effectiveStep === "TARGET") {
+      return "Select target";
+    }
+    if (shouldShowResult) {
+      return "Completed";
+    }
+    if (normalizedStatus === "FAILED") {
+      return "Failed";
+    }
+    if (normalizedStatus === "RUNNING" || normalizedStatus === "PROCESSING" || polling) {
+      return `Analyzing (${progressLabel})`;
+    }
+    return displayStatusLabel;
+  })();
   const frameSelectorKey = jobId ?? "frame-selector";
   const showManualPlayerFallback =
     showPlayerSection &&
@@ -1388,6 +1425,7 @@ export default function JobRunner() {
       setAnalysisError(null);
       setAnalysisPolling(false);
       setAnalysisRequesting(false);
+      analysisPollStartRef.current = null;
       previewListRequestRef.current = 0;
       pollStartRef.current = null;
       setPollingTimedOut(false);
@@ -1412,9 +1450,18 @@ export default function JobRunner() {
 
     let isMounted = true;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    if (!analysisPollStartRef.current) {
+      analysisPollStartRef.current = Date.now();
+    }
 
     const pollAnalysis = async () => {
       try {
+        const elapsedMs = Date.now() - (analysisPollStartRef.current ?? Date.now());
+        if (elapsedMs > 10 * 60 * 1000) {
+          setAnalysisError("Analysis polling timed out. Please retry.");
+          setAnalysisPolling(false);
+          return;
+        }
         const updated = await getJob(jobId, analysisTrackId);
         if (!isMounted) {
           return;
@@ -2327,6 +2374,25 @@ export default function JobRunner() {
     handleRefreshJob();
   };
 
+  const handleRetryJobPolling = () => {
+    if (!jobId) {
+      return;
+    }
+    setError(null);
+    setPolling(true);
+    setPollingTimedOut(false);
+    pollStartRef.current = Date.now();
+  };
+
+  const handleRetryAnalysisPolling = () => {
+    if (!analysisTrackId) {
+      return;
+    }
+    setAnalysisError(null);
+    setAnalysisPolling(false);
+    analysisPollStartRef.current = Date.now();
+  };
+
   const handleFocusStep = () => {
     if (effectiveStep === "TARGET") {
       setGridMode("target");
@@ -2595,7 +2661,16 @@ export default function JobRunner() {
 
         {error ? (
           <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-            {error}
+            <p>{error}</p>
+            {jobId ? (
+              <button
+                type="button"
+                onClick={handleRetryJobPolling}
+                className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
+              >
+                Retry
+              </button>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -3755,7 +3830,14 @@ export default function JobRunner() {
 
           {analysisError ? (
             <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-              {analysisError}
+              <p>{analysisError}</p>
+              <button
+                type="button"
+                onClick={handleRetryAnalysisPolling}
+                className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
+              >
+                Retry
+              </button>
             </div>
           ) : null}
 
@@ -3781,7 +3863,7 @@ export default function JobRunner() {
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${statusClass}`}
           >
-            {displayStatusLabel}
+            {demoStatusLabel}
           </span>
         </div>
 
