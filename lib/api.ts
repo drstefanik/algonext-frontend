@@ -635,58 +635,76 @@ const buildCandidatePreviewFrames = (
 ): PreviewFrame[] => {
   const source = candidates.length > 0 ? candidates : fallbackCandidates;
   return source
-    .map((candidate, index) => {
-      const sampleFrame = candidate.sampleFrames?.[0] ?? null;
-      const frameKey =
-        sampleFrame?.frameKey ??
-        sampleFrame?.frame_key ??
-        sampleFrame?.filename ??
-        candidate.trackId ??
-        `candidate-${index}`;
-      const filename =
-        sampleFrame?.filename ??
-        sampleFrame?.frameKey ??
-        sampleFrame?.frame_key ??
-        frameKey ??
-        null;
-      const imageUrl = filename
-        ? `/api/jobs/${encodeURIComponent(jobId)}/candidates/${encodeURIComponent(
-            filename
-          )}`
-        : sampleFrame?.imageUrl ??
+    .flatMap((candidate, candidateIndex) => {
+      const sampleFrames =
+        candidate.sampleFrames && candidate.sampleFrames.length > 0
+          ? candidate.sampleFrames
+          : [
+              {
+                imageUrl: candidate.thumbnailUrl ?? null,
+                frameKey: candidate.trackId,
+                frame_time_sec: candidate.frameTimeSec ?? candidate.t ?? null,
+                x: candidate.x ?? null,
+                y: candidate.y ?? null,
+                w: candidate.w ?? null,
+                h: candidate.h ?? null
+              }
+            ];
+
+      return sampleFrames.map((sampleFrame, frameIndex) => {
+        const frameKey =
+          sampleFrame?.frameKey ??
+          sampleFrame?.frame_key ??
+          sampleFrame?.filename ??
+          candidate.trackId ??
+          `candidate-${candidateIndex}-${frameIndex}`;
+        const filename =
+          sampleFrame?.filename ??
+          sampleFrame?.frameKey ??
+          sampleFrame?.frame_key ??
+          frameKey ??
+          null;
+        const imageUrl =
+          sampleFrame?.imageUrl ??
+          (filename
+            ? `/api/jobs/${encodeURIComponent(jobId)}/candidates/${encodeURIComponent(
+                filename
+              )}`
+            : null) ??
           candidate.thumbnailUrl ??
           "";
-      const timeSec =
-        sampleFrame?.frameTimeSec ??
-        sampleFrame?.frame_time_sec ??
-        candidate.frameTimeSec ??
-        candidate.frame_time_sec ??
-        candidate.t ??
-        null;
-      const bboxSource = sampleFrame ?? candidate;
-      const x = coerceNumber(bboxSource?.x ?? null);
-      const y = coerceNumber(bboxSource?.y ?? null);
-      const w = coerceNumber(bboxSource?.w ?? null);
-      const h = coerceNumber(bboxSource?.h ?? null);
-      const track =
-        x !== null && y !== null && w !== null && h !== null
-          ? {
-              trackId: candidate.trackId,
-              x,
-              y,
-              w,
-              h
-            }
-          : null;
+        const timeSec =
+          sampleFrame?.frameTimeSec ??
+          sampleFrame?.frame_time_sec ??
+          candidate.frameTimeSec ??
+          candidate.frame_time_sec ??
+          candidate.t ??
+          null;
+        const bboxSource = sampleFrame ?? candidate;
+        const x = coerceNumber(bboxSource?.x ?? null);
+        const y = coerceNumber(bboxSource?.y ?? null);
+        const w = coerceNumber(bboxSource?.w ?? null);
+        const h = coerceNumber(bboxSource?.h ?? null);
+        const track =
+          x !== null && y !== null && w !== null && h !== null
+            ? {
+                trackId: candidate.trackId,
+                x,
+                y,
+                w,
+                h
+              }
+            : null;
 
-      return {
-        timeSec,
-        key: frameKey ?? `candidate-${index}`,
-        url: imageUrl,
-        width: null,
-        height: null,
-        tracks: track ? [track] : undefined
-      };
+        return {
+          timeSec,
+          key: frameKey ?? `candidate-${candidateIndex}-${frameIndex}`,
+          url: imageUrl,
+          width: null,
+          height: null,
+          tracks: track ? [track] : undefined
+        };
+      });
     })
     .filter((frame) => Boolean(frame.url));
 };
@@ -1008,96 +1026,17 @@ export async function getJobStatus(jobId: string) {
 const TARGET_FRAMES_COUNT = 32;
 
 export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
-  const timeoutMs = 60_000;
-  const startTime = Date.now();
-  const retryDelaysMs = [2000, 3000, 5000];
-  let retryIndex = 0;
-  const useCandidatesFallback =
-    process.env.NEXT_PUBLIC_USE_CANDIDATE_FRAMES === "true";
-  const getRetryDelayMs = () => {
-    const delay = retryDelaysMs[Math.min(retryIndex, retryDelaysMs.length - 1)];
-    retryIndex += 1;
-    return delay;
+  const { candidates, fallbackCandidates } = await getJobTrackCandidates(jobId);
+  const frames = buildCandidatePreviewFrames(
+    jobId,
+    candidates,
+    fallbackCandidates
+  ).slice(0, count);
+  return {
+    ok: true,
+    status: 200,
+    items: frames
   };
-  const wait = (delayMs: number) =>
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-
-  const getCandidateFrames = async () => {
-    const { candidates, fallbackCandidates } = await getJobTrackCandidates(jobId);
-    const frames = buildCandidatePreviewFrames(
-      jobId,
-      candidates,
-      fallbackCandidates
-    ).slice(0, count);
-    return {
-      ok: true,
-      status: 200,
-      items: frames
-    };
-  };
-
-  if (useCandidatesFallback) {
-    return getCandidateFrames();
-  }
-
-  while (true) {
-    const response = await fetchWithTimeout(
-      `/api/jobs/${jobId}/frames/list?count=${count}`,
-      {
-        method: "GET",
-        cache: "no-store"
-      }
-    );
-
-    if (response.status === 409) {
-      if (Date.now() - startTime >= timeoutMs) {
-        throw new Error("Preview frames not ready yet. Please retry.");
-      }
-      await wait(getRetryDelayMs());
-      continue;
-    }
-
-    if (response.status === 404) {
-      return getCandidateFrames();
-    }
-
-    if (!response.ok) {
-      await handleError(response);
-    }
-
-    const payload = unwrap<UnknownRecord | null>(
-      await response.json().catch(() => null)
-    );
-    const payloadRecord = payload && typeof payload === "object" ? payload : null;
-    const dataRecord =
-      payloadRecord && typeof payloadRecord.data === "object"
-        ? (payloadRecord.data as UnknownRecord)
-        : null;
-    const itemsSource =
-      dataRecord?.items ??
-      payloadRecord?.items ??
-      [];
-    const frames = normalizePreviewFrames(itemsSource).map((frame) => ({
-      ...frame,
-      url: frame.signedUrl ?? frame.url ?? ""
-    })); // usa mapPreviewFrame
-
-    if (frames.length > 0) {
-      return {
-        ok: true,
-        status: response.status,
-        items: frames
-      };
-    }
-
-    if (Date.now() - startTime >= timeoutMs) {
-      throw new Error("Preview frames not ready yet. Please retry.");
-    }
-
-    await wait(getRetryDelayMs());
-  }
 }
 
 export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {

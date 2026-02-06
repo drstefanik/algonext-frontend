@@ -74,8 +74,8 @@ const isBboxTooSmallOrLarge = (bbox: { x: number; y: number; w: number; h: numbe
 const formatFrameTime = (timeSec: number | null) =>
   timeSec === null ? "—" : `${timeSec.toFixed(2)}s`;
 
-  const formatFrameAlt = (timeSec: number | null) =>
-    timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
+const formatFrameAlt = (timeSec: number | null) =>
+  timeSec === null ? "Preview frame (time unknown)" : `Preview frame at ${timeSec.toFixed(2)}s`;
 
 const formatMetric = (value: number | null | undefined, suffix = "") =>
   value === null || value === undefined
@@ -914,6 +914,8 @@ export default function JobRunner() {
     totalTracksCount > 0 && trackCandidates.length === 0 && !loadingTrackCandidates;
   const hasCandidateList =
     trackCandidates.length > 0 || fallbackCandidates.length > 0;
+  const candidatePreviewList =
+    trackCandidates.length > 0 ? trackCandidates : fallbackCandidates;
   const [previewImageSize, setPreviewImageSize] = useState<{
     width: number;
     height: number;
@@ -1390,6 +1392,44 @@ export default function JobRunner() {
   }, [shouldPollFrameList]);
 
   useEffect(() => {
+    if (!jobId || hasPlayerRef) {
+      return;
+    }
+    let cancelled = false;
+    setCandidatePolling(true);
+    setLoadingTrackCandidates(true);
+    setPlayerCandidateError(null);
+
+    getJobTrackCandidates(jobId)
+      .then(({ candidates, fallbackCandidates: fallbackList }) => {
+        if (cancelled) {
+          return;
+        }
+        setTrackCandidates(candidates);
+        setFallbackCandidates(fallbackList);
+      })
+      .catch((fetchError) => {
+        if (cancelled) {
+          return;
+        }
+        setTrackCandidates([]);
+        setFallbackCandidates([]);
+        setPlayerCandidateError(toErrorMessage(fetchError));
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+        setCandidatePolling(false);
+        setLoadingTrackCandidates(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, hasPlayerRef]);
+
+  useEffect(() => {
     if (
       previewFrames.length > 0 &&
       previewFramesWithImages.length === previewFrames.length
@@ -1520,6 +1560,7 @@ export default function JobRunner() {
           return;
         }
         setOverlayGalleryFrames(res.items);
+        setPreviewFrames(res.items);
         setFramesApiCount(res.items.length);
         if (res.items.length > 0) {
           setPreviewPollingActive(false);
@@ -1854,6 +1895,102 @@ export default function JobRunner() {
       return;
     }
     await handlePickPlayer(candidate.trackId, frameKey);
+  };
+
+  const handleSelectCandidateFrame = async (
+    frame: PreviewFrame,
+    candidate?: TrackCandidate | null
+  ) => {
+    if (!jobId) {
+      return;
+    }
+    const track = frame.tracks?.[0] ?? null;
+    const selectionSource = track ?? candidate ?? null;
+    const bbox = selectionSource ? getSelectionBBox(selectionSource) : null;
+    const frameTimeSec =
+      frame.timeSec ??
+      getSelectionTimeSec(selectionSource) ??
+      getSelectionTimeSec(candidate) ??
+      null;
+
+    if (!bbox || frameTimeSec == null) {
+      setPlayerCandidateError(
+        "Missing bbox or frame time for this candidate. Check sample frames mapping."
+      );
+      return;
+    }
+    setPlayerCandidateError(null);
+    setSelectingTrackId(track?.trackId ?? candidate?.trackId ?? null);
+    setPlayerRefSelection({
+      frameTimeSec,
+      x: bbox.x,
+      y: bbox.y,
+      w: bbox.w,
+      h: bbox.h
+    });
+    try {
+      await saveJobPlayerRef(jobId, {
+        frameTimeSec,
+        x: bbox.x,
+        y: bbox.y,
+        w: bbox.w,
+        h: bbox.h
+      });
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+      setSelectedTrackId(track?.trackId ?? candidate?.trackId ?? null);
+      setCandidateReview(null);
+      setGridMode("target");
+    } catch (selectError) {
+      setPlayerCandidateError(toErrorMessage(selectError));
+    } finally {
+      setSelectingTrackId(null);
+    }
+  };
+
+  const handleSelectCandidateSampleFrame = async (
+    candidate: TrackCandidate,
+    sampleFrame: TrackCandidateSampleFrame
+  ) => {
+    if (!jobId) {
+      return;
+    }
+    const bbox = resolveCandidateBox(sampleFrame, candidate);
+    const frameTimeSec =
+      getSelectionTimeSec(sampleFrame) ?? getSelectionTimeSec(candidate) ?? null;
+    if (!bbox || frameTimeSec == null) {
+      setPlayerCandidateError(
+        "Missing bbox or frame time for this candidate. Check sample frames mapping."
+      );
+      return;
+    }
+    setPlayerCandidateError(null);
+    setSelectingTrackId(candidate.trackId);
+    setPlayerRefSelection({
+      frameTimeSec,
+      x: bbox.x,
+      y: bbox.y,
+      w: bbox.w,
+      h: bbox.h
+    });
+    try {
+      await saveJobPlayerRef(jobId, {
+        frameTimeSec,
+        x: bbox.x,
+        y: bbox.y,
+        w: bbox.w,
+        h: bbox.h
+      });
+      const updatedJob = await getJob(jobId);
+      setJob(updatedJob);
+      setSelectedTrackId(candidate.trackId);
+      setCandidateReview(null);
+      setGridMode("target");
+    } catch (selectError) {
+      setPlayerCandidateError(toErrorMessage(selectError));
+    } finally {
+      setSelectingTrackId(null);
+    }
   };
 
   const handleReviewCandidate = (candidate: TrackCandidate) => {
@@ -2738,7 +2875,7 @@ export default function JobRunner() {
                     Player selection
                   </p>
                   <p className="mt-2 text-sm text-slate-200">
-                    Use the frames below to draw a bounding box for the player.
+                    Select an AI-detected candidate to save the player reference.
                   </p>
                 </div>
               </div>
@@ -2749,10 +2886,10 @@ export default function JobRunner() {
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
                         <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                          Overlay frames gallery
+                          AI-detected player candidates
                         </p>
                         <p className="mt-1 text-sm text-slate-200">
-                          Click a frame to draw a bounding box around the player.
+                          Click a frame to accept the suggested player box.
                         </p>
                       </div>
                     </div>
@@ -2777,10 +2914,159 @@ export default function JobRunner() {
                         onFrameError={(frame) =>
                           handlePreviewFrameFallback(frame, "overlay-gallery")
                         }
-                        onSelectFrame={(frame) => handleOpenPreview(frame, "player-ref")}
+                        onSelectFrame={(frame) => {
+                          const trackId = frame.tracks?.[0]?.trackId ?? null;
+                          const candidate =
+                            trackId !== null
+                              ? trackCandidates.find(
+                                  (item) => item.trackId === trackId
+                                ) ??
+                                fallbackCandidates.find(
+                                  (item) => item.trackId === trackId
+                                ) ??
+                                null
+                              : null;
+                          void handleSelectCandidateFrame(frame, candidate);
+                        }}
                       />
                     )}
                   </div>
+
+                  {hasCandidateList ? (
+                    <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                          AI-detected player candidates
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleRefreshTrackCandidates}
+                          disabled={loadingTrackCandidates}
+                          className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
+                        </button>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {candidatePreviewList.map((candidate) => {
+                          const sampleFrames =
+                            candidate.sampleFrames?.filter((frame) => frame.imageUrl) ??
+                            [];
+                          const previewFrames =
+                            sampleFrames.length > 0
+                              ? sampleFrames.slice(0, 3)
+                              : candidate.thumbnailUrl
+                                ? [
+                                    {
+                                      imageUrl: candidate.thumbnailUrl,
+                                      x: candidate.x ?? null,
+                                      y: candidate.y ?? null,
+                                      w: candidate.w ?? null,
+                                      h: candidate.h ?? null
+                                    }
+                                  ]
+                                : [];
+                          const isSelecting =
+                            selectingTrackId === candidate.trackId;
+                          return (
+                            <div
+                              key={candidate.trackId}
+                              className="rounded-xl border border-slate-800 bg-slate-950 p-3"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                  Track {candidate.trackId}
+                                </span>
+                                {isSelecting ? (
+                                  <span className="text-[0.65rem] uppercase tracking-[0.2em] text-emerald-200">
+                                    Selecting...
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-3 grid gap-2 text-xs text-slate-400">
+                                <div className="flex items-center justify-between">
+                                  <span className="uppercase tracking-[0.2em] text-slate-500">
+                                    Coverage pct
+                                  </span>
+                                  <span className="text-sm text-slate-200">
+                                    {formatPercent(candidate.coverage)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="uppercase tracking-[0.2em] text-slate-500">
+                                    Stability score
+                                  </span>
+                                  <span className="text-sm text-slate-200">
+                                    {formatScore(candidate.stability)}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                {previewFrames.length > 0 ? (
+                                  previewFrames.map((frame, index) => {
+                                    const frameSrc = getCandidateSampleFrameSrc(
+                                      frame.imageUrl ?? null
+                                    );
+                                    const bbox = resolveCandidateBox(
+                                      frame,
+                                      candidate
+                                    );
+                                    return (
+                                      <button
+                                        key={`${candidate.trackId}-sample-${index}`}
+                                        type="button"
+                                        onClick={() =>
+                                          handleSelectCandidateSampleFrame(
+                                            candidate,
+                                            frame
+                                          )
+                                        }
+                                        disabled={isSelecting}
+                                        className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        {frameSrc ? (
+                                          <img
+                                            src={frameSrc}
+                                            alt={`Candidate ${candidate.trackId} sample ${index + 1}`}
+                                            className="h-20 w-full object-cover"
+                                            onError={() =>
+                                              handleCandidateFrameFallback(
+                                                "candidate-sample",
+                                                frame.imageUrl
+                                              )
+                                            }
+                                          />
+                                        ) : (
+                                          <div className="flex h-20 w-full items-center justify-center text-xs text-slate-500">
+                                            No sample
+                                          </div>
+                                        )}
+                                        {bbox ? (
+                                          <div
+                                            className="absolute rounded border border-emerald-300 bg-emerald-400/20"
+                                            style={{
+                                              left: `${bbox.x * 100}%`,
+                                              top: `${bbox.y * 100}%`,
+                                              width: `${bbox.w * 100}%`,
+                                              height: `${bbox.h * 100}%`
+                                            }}
+                                          />
+                                        ) : null}
+                                      </button>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="col-span-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-500">
+                                    No sample frames available.
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {showLegacyFlow && selectedTrackId ? (
                     <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4">
