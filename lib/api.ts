@@ -174,6 +174,7 @@ export type TrackCandidateSampleFrame = {
   frame_time_sec?: number | null;
   frameKey?: string | null;
   frame_key?: string | null;
+  filename?: string | null;
   x?: number | null;
   y?: number | null;
   w?: number | null;
@@ -459,7 +460,14 @@ const mapTrackCandidateSampleFrame = (
       sample.sample_time_sec ??
       sample.sampleTimeSec
   );
-  const frameKey = sample.frameKey ?? sample.frame_key ?? sample.key ?? null;
+  const frameKeyRaw =
+    sample.frameKey ??
+    sample.frame_key ??
+    sample.key ??
+    sample.filename ??
+    sample.file_name ??
+    null;
+  const frameKey = frameKeyRaw ?? null;
   const bboxSource =
     sample.bbox_xywh ??
     sample.bbox ??
@@ -479,12 +487,20 @@ const mapTrackCandidateSampleFrame = (
     sample.thumbnailUrl ??
     sample.thumbnail_url ??
     null;
+  const filename =
+    sample.filename ??
+    sample.file_name ??
+    sample.frame_key ??
+    sample.frameKey ??
+    sample.key ??
+    null;
   return {
     imageUrl,
     frameTimeSec,
     frame_time_sec: frameTimeSec,
     frameKey,
     frame_key: frameKey,
+    filename,
     x,
     y,
     w,
@@ -610,6 +626,69 @@ const normalizeTrackCandidates = (payload: unknown): TrackCandidatesResponse => 
     : [];
 
   return { candidates, fallbackCandidates };
+};
+
+const buildCandidatePreviewFrames = (
+  jobId: string,
+  candidates: TrackCandidate[],
+  fallbackCandidates: TrackCandidate[]
+): PreviewFrame[] => {
+  const source = candidates.length > 0 ? candidates : fallbackCandidates;
+  return source
+    .map((candidate, index) => {
+      const sampleFrame = candidate.sampleFrames?.[0] ?? null;
+      const frameKey =
+        sampleFrame?.frameKey ??
+        sampleFrame?.frame_key ??
+        sampleFrame?.filename ??
+        candidate.trackId ??
+        `candidate-${index}`;
+      const filename =
+        sampleFrame?.filename ??
+        sampleFrame?.frameKey ??
+        sampleFrame?.frame_key ??
+        frameKey ??
+        null;
+      const imageUrl = filename
+        ? `/api/jobs/${encodeURIComponent(jobId)}/candidates/${encodeURIComponent(
+            filename
+          )}`
+        : sampleFrame?.imageUrl ??
+          candidate.thumbnailUrl ??
+          "";
+      const timeSec =
+        sampleFrame?.frameTimeSec ??
+        sampleFrame?.frame_time_sec ??
+        candidate.frameTimeSec ??
+        candidate.frame_time_sec ??
+        candidate.t ??
+        null;
+      const bboxSource = sampleFrame ?? candidate;
+      const x = coerceNumber(bboxSource?.x ?? null);
+      const y = coerceNumber(bboxSource?.y ?? null);
+      const w = coerceNumber(bboxSource?.w ?? null);
+      const h = coerceNumber(bboxSource?.h ?? null);
+      const track =
+        x !== null && y !== null && w !== null && h !== null
+          ? {
+              trackId: candidate.trackId,
+              x,
+              y,
+              w,
+              h
+            }
+          : null;
+
+      return {
+        timeSec,
+        key: frameKey ?? `candidate-${index}`,
+        url: imageUrl,
+        width: null,
+        height: null,
+        tracks: track ? [track] : undefined
+      };
+    })
+    .filter((frame) => Boolean(frame.url));
 };
 
 const mapJobResponse = (job: UnknownRecord): JobResponse => {
@@ -933,6 +1012,8 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
   const startTime = Date.now();
   const retryDelaysMs = [2000, 3000, 5000];
   let retryIndex = 0;
+  const useCandidatesFallback =
+    process.env.NEXT_PUBLIC_USE_CANDIDATE_FRAMES === "true";
   const getRetryDelayMs = () => {
     const delay = retryDelaysMs[Math.min(retryIndex, retryDelaysMs.length - 1)];
     retryIndex += 1;
@@ -942,6 +1023,24 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
     new Promise<void>((resolve) => {
       setTimeout(resolve, delayMs);
     });
+
+  const getCandidateFrames = async () => {
+    const { candidates, fallbackCandidates } = await getJobTrackCandidates(jobId);
+    const frames = buildCandidatePreviewFrames(
+      jobId,
+      candidates,
+      fallbackCandidates
+    ).slice(0, count);
+    return {
+      ok: true,
+      status: 200,
+      items: frames
+    };
+  };
+
+  if (useCandidatesFallback) {
+    return getCandidateFrames();
+  }
 
   while (true) {
     const response = await fetchWithTimeout(
@@ -958,6 +1057,10 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
       }
       await wait(getRetryDelayMs());
       continue;
+    }
+
+    if (response.status === 404) {
+      return getCandidateFrames();
     }
 
     if (!response.ok) {
