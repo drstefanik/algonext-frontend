@@ -38,7 +38,14 @@ export default function ResultView({ job }: { job: JobResponse }) {
   const result = job.result ?? null;
   const summary = result?.summary ?? null;
   const summaryRecord = summary as Record<string, unknown> | null;
-  const overallScore = result?.overallScore ?? summary?.overallScore ?? null;
+  const matchRating10 =
+    resolveMetricValue(result as Record<string, unknown> | null, [
+      "match_rating_10"
+    ]) ?? resolveMetricValue(summaryRecord, ["match_rating_10"]);
+  const impact100 =
+    resolveMetricValue(result as Record<string, unknown> | null, [
+      "impact_100"
+    ]) ?? resolveMetricValue(summaryRecord, ["impact_100"]);
   const roleScore =
     result?.roleScore ??
     (summaryRecord?.roleScore as number | null | undefined) ??
@@ -72,8 +79,8 @@ export default function ResultView({ job }: { job: JobResponse }) {
     (job as { data?: { warnings?: unknown[] } }).data?.warnings ??
     null;
   const { messages: warningMessages } = extractWarnings(warningPayload);
-  const overallScoreUnavailable = overallScore == null;
-  const overallWarning = overallScoreUnavailable ? warningMessages[0] : null;
+  const matchRatingUnavailable = matchRating10 == null;
+  const matchRatingWarning = matchRatingUnavailable ? warningMessages[0] : null;
   const roleScoreUnavailable = roleScore == null;
   const scoreExplanation =
     resolveStringField(
@@ -138,21 +145,35 @@ export default function ResultView({ job }: { job: JobResponse }) {
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
             <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
-              Overall Score
+              Match rating
             </p>
-            {overallScoreUnavailable ? (
+            {matchRatingUnavailable ? (
               <>
                 <p className="mt-2 text-lg font-semibold text-slate-200">
-                  Overall score unavailable
+                  Rating pending
                 </p>
-                {overallWarning ? (
-                  <p className="mt-2 text-xs text-amber-200">{overallWarning}</p>
+                {matchRatingWarning ? (
+                  <p className="mt-2 text-xs text-amber-200">
+                    {matchRatingWarning}
+                  </p>
                 ) : null}
               </>
             ) : (
-              <p className="mt-2 text-3xl font-semibold text-emerald-400">
-                {formatScore(overallScore)}
-              </p>
+              <>
+                <p className="mt-2 text-3xl font-semibold text-emerald-400">
+                  {typeof matchRating10 === "number"
+                    ? formatScore(matchRating10)
+                    : matchRating10}
+                </p>
+                {impact100 == null ? null : (
+                  <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Impact 100 ·{" "}
+                    {typeof impact100 === "number"
+                      ? formatScore(impact100)
+                      : impact100}
+                  </p>
+                )}
+              </>
             )}
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
