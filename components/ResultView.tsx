@@ -59,7 +59,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
     expectedRadarKeys.length > 0 &&
     radarEntries.length > 0 &&
     radarEntries.length < expectedRadarKeys.length;
-  const clips = result?.clips ?? result?.assets?.clips ?? [];
+  const clips = job?.assets?.clips ?? [];
   const inputVideoUrl =
     result?.assets?.inputVideoUrl ??
     result?.assets?.input_video_url ??
@@ -71,12 +71,10 @@ export default function ResultView({ job }: { job: JobResponse }) {
     job.warnings ??
     (job as { data?: { warnings?: unknown[] } }).data?.warnings ??
     null;
-  const { messages: warningMessages, codes: warningCodes } =
-    extractWarnings(warningPayload);
+  const { messages: warningMessages } = extractWarnings(warningPayload);
   const overallScoreUnavailable = overallScore == null;
   const overallWarning = overallScoreUnavailable ? warningMessages[0] : null;
   const roleScoreUnavailable = roleScore == null;
-  const clipExtractionFailed = warningCodes.includes("CLIP_EXTRACTION_FAILED");
   const scoreExplanation =
     resolveStringField(
       result?.scoreExplanation,
@@ -280,29 +278,31 @@ export default function ResultView({ job }: { job: JobResponse }) {
               Clips & assets
             </p>
             {clips.length === 0 ? (
-              <p className="mt-2 text-slate-400">
-                {clipExtractionFailed
-                  ? "Clip extraction failed."
-                  : "Clips unavailable for this analysis."}
-              </p>
+              <p className="mt-2 text-slate-400">No clips yet.</p>
             ) : (
               <ul className="mt-2 space-y-2">
-                {clips.map((clip, index) => (
-                  <li key={`${clip.signedUrl ?? "clip"}-${index}`}>
-                    {clip.signedUrl ? (
-                      <a
-                        href={clip.signedUrl}
-                        className="text-emerald-400 hover:text-emerald-300"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Clip {index + 1} ({clip.start ?? "?"}s-{clip.end ?? "?"}s)
-                      </a>
-                    ) : (
-                      <span className="text-slate-400">Clip link unavailable.</span>
-                    )}
-                  </li>
-                ))}
+                {clips.map((clip, index) => {
+                  const clipLabel = clip?.label ?? `Clip ${index + 1}`;
+                  return (
+                    <li key={`${clip?.url ?? clipLabel}-${index}`}>
+                      <span className="text-slate-200">{clipLabel}</span>
+                      {clip?.url ? (
+                        <a
+                          href={clip.url}
+                          className="ml-2 text-emerald-400 hover:text-emerald-300"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open clip
+                        </a>
+                      ) : (
+                        <span className="ml-2 text-slate-400">
+                          Clip link unavailable.
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
@@ -337,37 +337,43 @@ export default function ResultView({ job }: { job: JobResponse }) {
               Clips
             </p>
             {clips.length === 0 ? (
-              <p className="mt-2 text-slate-400">
-                {clipExtractionFailed
-                  ? "Clip extraction failed."
-                  : "Clips unavailable for this analysis."}
-              </p>
+              <p className="mt-2 text-slate-400">No clips yet.</p>
             ) : (
               <ul className="mt-2 space-y-3">
-                {clips.map((clip, index) => (
-                  <li
-                    key={`${clip.signedUrl ?? "clip"}-${index}`}
-                    className="flex flex-col gap-1 rounded-lg border border-slate-800 bg-slate-950 p-3"
-                  >
-                    <span className="text-xs text-slate-500">
-                      {clip.start ?? "?"}s - {clip.end ?? "?"}s
-                    </span>
-                    {clip.signedUrl ? (
-                      <a
-                        href={clip.signedUrl}
-                        className="text-emerald-400 hover:text-emerald-300"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open clip
-                      </a>
-                    ) : (
-                      <span className="text-slate-400">
-                        Clip link unavailable.
+                {clips.map((clip, index) => {
+                  const clipLabel = clip?.label ?? `Clip ${index + 1}`;
+                  return (
+                    <li
+                      key={`${clip?.url ?? clipLabel}-${index}`}
+                      className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-950 p-3"
+                    >
+                      <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        {clipLabel}
                       </span>
-                    )}
-                  </li>
-                ))}
+                      {clip?.url ? (
+                        <>
+                          <a
+                            href={clip.url}
+                            className="text-emerald-400 hover:text-emerald-300"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open clip
+                          </a>
+                          <video
+                            className="w-full rounded-lg border border-slate-800"
+                            controls
+                            src={clip.url}
+                          />
+                        </>
+                      ) : (
+                        <span className="text-slate-400">
+                          Clip link unavailable.
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
