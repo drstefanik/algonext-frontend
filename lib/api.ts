@@ -55,6 +55,10 @@ export type JobClip = {
   index?: number;
   start?: number;
   end?: number;
+  startSec?: number;
+  endSec?: number;
+  label?: string;
+  url?: string;
   s3Key?: string;
   signedUrl?: string;
   expiresIn?: number;
@@ -117,6 +121,10 @@ export type JobResponse = {
   errorDetail?: string;
   previewFrames?: PreviewFrame[];
   result?: JobResult;
+  assets?: {
+    clips?: JobClip[];
+    [key: string]: any;
+  };
   playerRef?: FrameSelection;
   playerRefRaw?: unknown;
   target?: JobTarget;
