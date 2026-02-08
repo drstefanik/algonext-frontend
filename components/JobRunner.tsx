@@ -693,6 +693,11 @@ export default function JobRunner() {
   const resultMissing = shouldShowResult && !job?.result;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
+  const isReadyToEnqueue = normalizedStatus === "READY_TO_ENQUEUE";
+  const isAnalyzingStatus =
+    normalizedStatus === "ANALYZING" ||
+    normalizedStatus === "RUNNING" ||
+    normalizedStatus === "PROCESSING";
   const isCandidatesFailed = normalizedStep === "CANDIDATES_FAILED";
   const warningsPayload =
     job?.result?.warnings ??
@@ -868,6 +873,12 @@ export default function JobRunner() {
     return displayStatusLabel;
   })();
   const frameSelectorKey = jobId ?? "frame-selector";
+  const handleFocusAnalysis = () => {
+    analysisSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  };
   const showManualPlayerFallback =
     showPlayerSection &&
     (previewsReady || isCandidatesFailed) &&
@@ -1780,7 +1791,7 @@ export default function JobRunner() {
     if (!jobId) {
       return;
     }
-    if (!canEnqueue) {
+    if (!canEnqueue && !isReadyToEnqueue) {
       setError("Seleziona player e target prima di avviare");
       return;
     }
@@ -2712,6 +2723,34 @@ export default function JobRunner() {
                     {effectiveStep === "TARGET" ? "Select target now" : playerCtaLabel}
                   </button>
                 ) : null}
+                {jobId && isReadyToEnqueue ? (
+                  <PrimaryButton
+                    onClick={handleEnqueue}
+                    disabled={submitting}
+                    aria-disabled={submitting}
+                    className={submitting ? "cursor-not-allowed opacity-60" : ""}
+                  >
+                    {submitting ? "Starting..." : "Start analysis"}
+                  </PrimaryButton>
+                ) : null}
+                {jobId && isAnalyzingStatus ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full cursor-not-allowed rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-3 text-left text-sm font-semibold text-slate-400"
+                  >
+                    Analyzing...
+                  </button>
+                ) : null}
+                {jobId && isFinalStatus ? (
+                  <button
+                    type="button"
+                    onClick={handleFocusAnalysis}
+                    className="w-full rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-left text-sm font-semibold text-emerald-200 transition hover:border-emerald-300"
+                  >
+                    View results
+                  </button>
+                ) : null}
 
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
@@ -2941,17 +2980,19 @@ export default function JobRunner() {
                 Job Created
               </p>
               <p className="mt-2 text-sm text-slate-200">ID: {jobId}</p>
-              <PrimaryButton
-                onClick={handleEnqueue}
-                disabled={!canEnqueue || submitting}
-                aria-disabled={!canEnqueue || submitting}
-                className={
-                  !canEnqueue || submitting ? "cursor-not-allowed opacity-50" : ""
-                }
-              >
-                {submitting ? "Starting..." : "Start analysis"}
-              </PrimaryButton>
-              <p className="mt-2 text-xs text-slate-500">{enqueueHint}</p>
+              {isReadyToEnqueue ? (
+                <PrimaryButton
+                  onClick={handleEnqueue}
+                  disabled={submitting}
+                  aria-disabled={submitting}
+                  className={submitting ? "cursor-not-allowed opacity-50" : ""}
+                >
+                  {submitting ? "Starting..." : "Start analysis"}
+                </PrimaryButton>
+              ) : null}
+              <p className="mt-2 text-xs text-slate-500">
+                {isReadyToEnqueue ? "Ready" : enqueueHint}
+              </p>
             </div>
           ) : null}
 
@@ -4257,6 +4298,34 @@ export default function JobRunner() {
                   </div>
                 ) : null}
               </div>
+            ) : null}
+
+            {jobId && isReadyToEnqueue ? (
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <PrimaryButton onClick={handleEnqueue} disabled={submitting}>
+                  {submitting ? "Starting..." : "Start analysis"}
+                </PrimaryButton>
+              </div>
+            ) : null}
+
+            {jobId && isAnalyzingStatus ? (
+              <button
+                type="button"
+                disabled
+                className="mt-4 w-full cursor-not-allowed rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-3 text-left text-sm font-semibold text-slate-400"
+              >
+                Analyzing...
+              </button>
+            ) : null}
+
+            {jobId && isFinalStatus ? (
+              <button
+                type="button"
+                onClick={handleFocusAnalysis}
+                className="mt-4 w-full rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-left text-sm font-semibold text-emerald-200 transition hover:border-emerald-300"
+              >
+                View results
+              </button>
             ) : null}
 
             {analysisError ? (
