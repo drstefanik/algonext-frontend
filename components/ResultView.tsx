@@ -397,7 +397,8 @@ export default function ResultView({ job }: { job: JobResponse }) {
                 {resolvedClips.map((clip, index) => {
                   const clipLabel = clip?.label ?? `Clip ${index + 1}`;
                   const clipUrl = clip?.url ?? clip?.signedUrl ?? null;
-                  const clipType = clip?.type ?? "clip";
+                  const clipType =
+                    (clip as { type?: string } | null | undefined)?.type ?? "clip";
                   return (
                     <li
                       key={`${clipUrl ?? clipLabel}-${index}`}
