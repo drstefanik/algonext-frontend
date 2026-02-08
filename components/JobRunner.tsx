@@ -32,6 +32,13 @@ import ResultView from "@/components/ResultView";
 import { extractWarnings } from "@/lib/warnings";
 import OverlayFramesGallery from "@/components/OverlayFramesGallery";
 import { normalizeFrameUrl } from "@/lib/frameUrl";
+import WizardShell from "@/components/WizardShell";
+import StepCard from "@/components/StepCard";
+import DebugPanel from "@/components/DebugPanel";
+import FrameGrid from "@/components/FrameGrid";
+import PrimaryButton from "@/components/PrimaryButton";
+import StatusPill from "@/components/StatusPill";
+import { getStatusLabel } from "@/components/statusLabels";
 import {
   clampNormalized,
   coerceNumber,
@@ -577,8 +584,9 @@ export default function JobRunner() {
   const previewModalRef = useRef<HTMLDivElement | null>(null);
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
-  const playerSectionRef = useRef<HTMLElement | null>(null);
-  const analysisSectionRef = useRef<HTMLElement | null>(null);
+  const playerSectionRef = useRef<HTMLDivElement | null>(null);
+  const targetSectionRef = useRef<HTMLDivElement | null>(null);
+  const analysisSectionRef = useRef<HTMLDivElement | null>(null);
   const pollStartRef = useRef<number | null>(null);
   const analysisPollStartRef = useRef<number | null>(null);
 
@@ -597,16 +605,7 @@ export default function JobRunner() {
   const normalizedStep =
     typeof step === "string" ? step.trim().toUpperCase() : null;
   const displayStatus = job?.status ?? "WAITING";
-  const displayStatusLabelMap: Record<string, string> = {
-    WAITING_FOR_PLAYER: "Select player",
-    WAITING_FOR_SELECTION: "Select target",
-    RUNNING: "Running",
-    COMPLETED: "Completed",
-    PARTIAL: "Completed (partial)",
-    FAILED: "Failed"
-  };
-  const displayStatusLabel =
-    displayStatusLabelMap[displayStatus] ?? displayStatus.toLowerCase();
+  const displayStatusLabel = getStatusLabel(displayStatus);
 
   const statusClass = useMemo(() => {
     if (!displayStatus) {
@@ -651,12 +650,10 @@ export default function JobRunner() {
           return applyTargetCandidates(resolvedFrame);
         })
       : jobPreviewFrames.map((frame) => applyTargetCandidates(frame));
-  const targetGalleryFrames =
-    overlayGalleryFrames.length > 0 ? overlayGalleryFrames : resolvedPreviewFrames;
-  const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
+  const previewFramesWithImages = previewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
-  const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
+  const hasAnyPreviewFrames = previewFrames.length > 0;
   const hasPreviewImages = previewFramesWithImages.length > 0;
   const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
@@ -681,6 +678,7 @@ export default function JobRunner() {
       "confirmed" in job.target &&
       (job.target as { confirmed?: boolean }).confirmed === true
   );
+  const hasFramesList = resolvedPreviewFrames.length > 0;
   const status = job?.status ?? null;
   const normalizedStatus = typeof status === "string" ? status.toUpperCase() : null;
   const isFinalStatus =
@@ -807,6 +805,32 @@ export default function JobRunner() {
   const enqueueHint = !canEnqueue
     ? "Seleziona player e target prima di avviare"
     : "Ready";
+  const wizardSteps = [
+    { label: "Upload" },
+    { label: "Player" },
+    { label: "Target" },
+    { label: "Analysis" }
+  ];
+  const wizardStep = (() => {
+    if (!jobId) {
+      return 1;
+    }
+    if (!hasPlayerRef) {
+      return 2;
+    }
+    if (hasPlayerRef && !targetConfirmed) {
+      return 3;
+    }
+    if (
+      targetConfirmed &&
+      ["ANALYZING", "RUNNING", "PROCESSING", "COMPLETED", "PARTIAL", "FAILED"].includes(
+        normalizedStatus ?? ""
+      )
+    ) {
+      return 4;
+    }
+    return 3;
+  })();
   const shouldPollFrames =
     Boolean(jobId) &&
     (isExtractingPreviews ||
@@ -855,8 +879,7 @@ export default function JobRunner() {
     autodetectLowCoverage && hasAutodetectErrorDetail
       ? errorDetail
       : "Autodetection coverage is low. Use the manual fallback below.";
-  const frameSelectorFrames =
-    gridMode === "target" ? targetGalleryFrames : previewFramesWithImages;
+  const frameSelectorFrames = previewFramesWithImages;
   const previewGridClassName =
     frameSelectorFrames.length > 8
       ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
@@ -866,6 +889,8 @@ export default function JobRunner() {
     (showManualPlayerFallback &&
       ((previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
         (isCandidatesFailed && (hasPreviewImages || previewFramesMissingUrls))));
+  const showFrameGridForPlayer = canShowFrameSelector && gridMode === "player-ref";
+  const showFrameGridForTarget = canShowFrameSelector && gridMode === "target";
   const isDetectingPlayers =
     (autodetectEnabled || candidatePolling) &&
     !autodetectLowCoverage &&
@@ -2532,7 +2557,7 @@ export default function JobRunner() {
   const handleFocusStep = () => {
     if (effectiveStep === "TARGET") {
       setGridMode("target");
-      playerSectionRef.current?.scrollIntoView({
+      targetSectionRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "start"
       });
@@ -2601,37 +2626,8 @@ export default function JobRunner() {
   const handleSelectTargetFromFrames = () => {
     setSelectionError(null);
     setSelectionWarning(null);
-    const selectionSource =
-      draftTargetSelection ?? jobTargetDraft ?? targetSelection ?? null;
-    if (selectionSource) {
-      const { frame: resolvedTargetFrame, warning } =
-        resolveTargetPreviewFrame(selectionSource);
-      if (warning && resolvedTargetFrame) {
-        setSelectionWarning(warning);
-      }
-      if (resolvedTargetFrame) {
-        handleOpenPreview(resolvedTargetFrame, "target", selectionSource);
-      } else {
-        setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
-      }
-    } else {
-      const fallbackFrame =
-        previewFramesWithImages.find(
-          (frame) => getTargetCandidatesForFrame(frame).length > 0
-        ) ?? previewFramesWithImages[0] ?? null;
-      if (!fallbackFrame) {
-        setSelectionError(
-          "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
-        );
-        return;
-      }
-      handleOpenPreview(fallbackFrame, "target");
-      setSelectionWarning(
-        "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
-      );
-    }
     setGridMode("target");
-    playerSectionRef.current?.scrollIntoView({
+    targetSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start"
     });
@@ -2654,7 +2650,7 @@ export default function JobRunner() {
     setSelectionWarning(null);
     setGridMode("target");
     handleOpenPreview(closestFrame, "target");
-    playerSectionRef.current?.scrollIntoView({
+    targetSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start"
     });
@@ -2676,7 +2672,7 @@ export default function JobRunner() {
       h: draftTargetSelection.h
     };
     if (isBboxOutOfBounds(bbox) || isBboxTooSmallOrLarge(bbox)) {
-      return "Select a player box.";
+      return "Select a target box.";
     }
     return null;
   }, [draftTargetSelection]);
@@ -2685,1570 +2681,251 @@ export default function JobRunner() {
   console.log("[frames]", previewFrames.length, previewFrames[0]);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Create Job</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Provide the details for a new analysis request.
-            </p>
-          </div>
-          <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-400">
-            Form
-          </span>
-        </div>
-
-        <div className="mt-6 space-y-4">
-          <label className="block text-sm text-slate-300">
-            Video URL (http/https) or MinIO Object Key
-            <textarea
-              value={videoUrl}
-              onChange={(event) => setVideoUrl(event.target.value)}
-              className="mt-2 h-24 w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none"
-              placeholder="https://..."
-            />
-          </label>
-
-          <label className="block text-sm text-slate-300">
-            Role
-            <select
-              value={role}
-              onChange={(event) => setRole(event.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-            >
-              {roles.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block text-sm text-slate-300">
-            Category
-            <input
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-            />
-          </label>
-
-          <label className="block text-sm text-slate-300">
-            Team name <span className="text-xs text-slate-500">(optional)</span>
-            <input
-              value={teamName}
-              onChange={(event) => setTeamName(event.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-              placeholder="e.g. Home team"
-            />
-          </label>
-
-          <label className="block text-sm text-slate-300">
-            Shirt number <span className="text-xs text-slate-500">(optional)</span>
-            <input
-              type="number"
-              value={shirtNumber}
-              onChange={(event) => setShirtNumber(event.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-              placeholder="e.g. 9"
-            />
-          </label>
-        </div>
-
-        <div className="mt-6 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={handleCreateJob}
-            disabled={submitting}
-            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? "Creating..." : "Create Job"}
-          </button>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500"
-          >
-            Reset
-          </button>
-        </div>
-
-        {jobId ? (
-          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Job Created
-            </p>
-            <p className="mt-2 text-sm text-slate-200">ID: {jobId}</p>
-            <button
-              type="button"
-              onClick={handleEnqueue}
-              disabled={!canEnqueue || submitting}
-              aria-disabled={!canEnqueue || submitting}
-              className={`mt-3 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-400 ${
-                !canEnqueue || submitting ? "cursor-not-allowed opacity-50" : ""
-              }`}
-            >
-              {submitting ? "Starting..." : "Start analysis"}
-            </button>
-            <p className="mt-2 text-xs text-slate-500">{enqueueHint}</p>
-          </div>
-        ) : null}
-
-        {error ? (
-          <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-            <p>{error}</p>
-            {jobId ? (
-              <button
-                type="button"
-                onClick={handleRetryJobPolling}
-                className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
-              >
-                Retry
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      <section
-        ref={playerSectionRef}
-        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
-      >
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Select Player</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Choose the player to track before processing continues.
-            </p>
-          </div>
-          <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-400">
-            Step
-          </span>
-        </div>
-
-        <div className="mt-6 space-y-6">
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
-            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
-              Preview debug
-            </p>
-            <div className="mt-2 grid gap-1">
-              <span>Status: {job?.status ?? "—"}</span>
-              <span>Step: {job?.progress?.step ?? "—"}</span>
-              <span>Frames (payload): {job?.previewFrames?.length ?? 0}</span>
-              <span>Frames (list): {previewFrames.length}</span>
-              <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
-              <span>Frames (overlayGallery): {overlayGalleryFrames.length}</span>
-              <span>Frames (api items): {framesApiCount ?? 0}</span>
-              <span>Frames error: {previewError || "—"}</span>
-              <span>Image errors: {previewImageErrorCount}</span>
-              <span>Warnings: {warningMessages.length}</span>
-              <span>Warnings(raw): {JSON.stringify(warningMessages)}</span>
-              <span>Clips: {clipsCount}</span>
-              <span>hasInputVideoUrl: {String(Boolean(inputVideoUrl))}</span>
-              <span>Radar keys: {radarKeysCount}</span>
-              <span>playerSaved: {String(playerSaved)}</span>
-              <span>targetSaved: {String(targetSaved)}</span>
-              <span>
-                playerRef(raw):{" "}
-                {JSON.stringify(
-                  (job as any)?.playerRefRaw ??
-                    (job as any)?.player_ref ??
-                    (job as any)?.playerRef ??
-                    job?.result?.player_ref ??
-                    job?.result?.playerRef ??
-                    null
-                )}
-              </span>
-              <span>
-                target(raw):{" "}
-                {JSON.stringify(job?.target ?? (job as any)?.data?.target ?? null)}
-              </span>
-            </div>
-          </div>
-          {jobId ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="space-y-8">
+      <WizardShell
+        title="Analysis workspace"
+        description="Follow the guided steps to create, review, and complete a player analysis job."
+        steps={wizardSteps}
+        currentStep={wizardStep}
+        sidebar={
+          <div className="space-y-6">
+            <section className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6 shadow-lg shadow-slate-950/30 backdrop-blur-sm">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Player selection
-                  </p>
-                  <p className="mt-2 text-sm text-slate-200">
-                    Select an AI-detected candidate to save the player reference.
+                  <h3 className="text-lg font-semibold text-white">Job Progress</h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Monitor processing status and output.
                   </p>
                 </div>
+                <StatusPill className={statusClass}>{demoStatusLabel}</StatusPill>
               </div>
 
-              {showPlayerSection ? (
-                <div className="mt-4 space-y-4">
-                  <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                          AI-detected player candidates
-                        </p>
-                        <p className="mt-1 text-sm text-slate-200">
-                          Click a frame to accept the suggested player box.
-                        </p>
-                      </div>
-                    </div>
+              <div className="mt-6 space-y-4">
+                <ProgressBar pct={pct} />
+                {effectiveStep === "TARGET" || effectiveStep === "PLAYER" ? (
+                  <button
+                    type="button"
+                    onClick={handleFocusStep}
+                    disabled={effectiveStep === "PLAYER" && isProcessingWithoutCandidates}
+                    className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {effectiveStep === "TARGET" ? "Select target now" : playerCtaLabel}
+                  </button>
+                ) : null}
 
-                    {previewError ? (
-                      <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-                        {previewError}
-                      </div>
-                    ) : null}
-                    {previewPollingActive &&
-                    overlayGalleryFrames.length === 0 &&
-                    !previewError ? (
-                      <div className="flex items-center gap-2 text-sm text-slate-400">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                        <span>Preparing frames...</span>
-                      </div>
-                    ) : previewError ? null : (
-                      <OverlayFramesGallery
-                        frames={overlayGalleryFrames}
-                        getFrameSrc={getPreviewFrameSrc}
-                        disabled={analysisRequesting}
-                        onFrameError={(frame) =>
-                          handlePreviewFrameFallback(frame, "overlay-gallery")
-                        }
-                        onSelectFrame={(frame) => {
-                          const trackId = frame.tracks?.[0]?.trackId ?? null;
-                          const candidate =
-                            trackId !== null
-                              ? trackCandidates.find(
-                                  (item) => item.trackId === trackId
-                                ) ??
-                                fallbackCandidates.find(
-                                  (item) => item.trackId === trackId
-                                ) ??
-                                null
-                              : null;
-                          void handleSelectCandidateFrame(frame, candidate);
-                        }}
-                      />
-                    )}
-                  </div>
-
-                  {hasCandidateList ? (
-                    <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                          AI-detected player candidates
-                        </p>
-                        <button
-                          type="button"
-                          onClick={handleRefreshTrackCandidates}
-                          disabled={loadingTrackCandidates}
-                          className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
-                        </button>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {candidatePreviewList.map((candidate) => {
-                          const sampleFrames =
-                            candidate.sampleFrames?.filter((frame) => frame.imageUrl) ??
-                            [];
-                          const previewFrames =
-                            sampleFrames.length > 0
-                              ? sampleFrames.slice(0, 3)
-                              : candidate.thumbnailUrl
-                                ? [
-                                    {
-                                      imageUrl: candidate.thumbnailUrl,
-                                      x: candidate.x ?? null,
-                                      y: candidate.y ?? null,
-                                      w: candidate.w ?? null,
-                                      h: candidate.h ?? null
-                                    }
-                                  ]
-                                : [];
-                          const isSelecting =
-                            selectingTrackId === candidate.trackId;
-                          return (
-                            <div
-                              key={candidate.trackId}
-                              className="rounded-xl border border-slate-800 bg-slate-950 p-3"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                  Track {candidate.trackId}
-                                </span>
-                                {isSelecting ? (
-                                  <span className="text-[0.65rem] uppercase tracking-[0.2em] text-emerald-200">
-                                    Selecting...
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="mt-3 grid gap-2 text-xs text-slate-400">
-                                <div className="flex items-center justify-between">
-                                  <span className="uppercase tracking-[0.2em] text-slate-500">
-                                    Coverage pct
-                                  </span>
-                                  <span className="text-sm text-slate-200">
-                                    {formatPercent(candidate.coverage)}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  <span className="uppercase tracking-[0.2em] text-slate-500">
-                                    Stability score
-                                  </span>
-                                  <span className="text-sm text-slate-200">
-                                    {formatScore(candidate.stability)}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                                {previewFrames.length > 0 ? (
-                                  previewFrames.map((frame, index) => {
-                                    const frameSrc = getCandidateSampleFrameSrc(
-                                      frame.imageUrl ?? null
-                                    );
-                                    const bbox = resolveCandidateBox(
-                                      frame,
-                                      candidate
-                                    );
-                                    return (
-                                      <button
-                                        key={`${candidate.trackId}-sample-${index}`}
-                                        type="button"
-                                        onClick={() =>
-                                          handleSelectCandidateSampleFrame(
-                                            candidate,
-                                            frame
-                                          )
-                                        }
-                                        disabled={isSelecting}
-                                        className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
-                                      >
-                                        {frameSrc ? (
-                                          <img
-                                            src={frameSrc}
-                                            alt={`Candidate ${candidate.trackId} sample ${index + 1}`}
-                                            className="h-20 w-full object-cover"
-                                            onError={() =>
-                                              handleCandidateFrameFallback(
-                                                "candidate-sample",
-                                                frame.imageUrl
-                                              )
-                                            }
-                                          />
-                                        ) : (
-                                          <div className="flex h-20 w-full items-center justify-center text-xs text-slate-500">
-                                            No sample
-                                          </div>
-                                        )}
-                                        {bbox ? (
-                                          <div
-                                            className="absolute rounded border border-emerald-300 bg-emerald-400/20"
-                                            style={{
-                                              left: `${bbox.x * 100}%`,
-                                              top: `${bbox.y * 100}%`,
-                                              width: `${bbox.w * 100}%`,
-                                              height: `${bbox.h * 100}%`
-                                            }}
-                                          />
-                                        ) : null}
-                                      </button>
-                                    );
-                                  })
-                                ) : (
-                                  <div className="col-span-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-500">
-                                    No sample frames available.
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {showLegacyFlow && selectedTrackId ? (
-                    <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.2em] text-emerald-200">
-                            Selected player
-                          </p>
-                          <p className="mt-1 text-sm text-slate-200">
-                            Track {selectedTrackId}
-                            {selectedCandidate?.tier
-                              ? ` · ${selectedCandidate.tier}`
-                              : ""}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                        <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
-                          {selectedPreviewThumbnail ? (
-                            <img
-                              src={selectedPreviewThumbnail}
-                              alt="Selected player frame"
-                              className="h-24 w-full object-cover"
-                              onError={() => {
-                                if (selectedPlayerPreviewFrame) {
-                                  handlePreviewFrameFallback(
-                                    selectedPlayerPreviewFrame,
-                                    "selected-preview"
-                                  );
-                                }
-                              }}
-                            />
-                          ) : (
-                            <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
-                              Best preview not available
-                            </div>
-                          )}
-                        </div>
-                        {selectedSamplePreviewFrames.map((frame, index) => {
-                          const frameSrc = getCandidateSampleFrameSrc(
-                            frame.imageUrl ?? null
-                          );
-                          const bbox = selectedCandidate
-                            ? resolveCandidateBox(frame ?? null, selectedCandidate)
-                            : null;
-                          return (
-                            <div
-                              key={`${selectedTrackId}-sample-${index}`}
-                              className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
-                            >
-                              {frameSrc ? (
-                                <img
-                                  src={frameSrc}
-                                  alt={`Selected sample ${index + 1}`}
-                                  className="h-24 w-full object-cover"
-                                  onError={() =>
-                                    handleCandidateFrameFallback(
-                                      "candidate-sample",
-                                      frame.imageUrl
-                                    )
-                                  }
-                                />
-                              ) : (
-                                <div className="flex h-24 w-full items-center justify-center text-xs text-slate-500">
-                                  No sample
-                                </div>
-                              )}
-                              {bbox ? (
-                                <div
-                                  className="absolute rounded border border-emerald-300 bg-emerald-400/20"
-                                  style={{
-                                    left: `${bbox.x * 100}%`,
-                                    top: `${bbox.y * 100}%`,
-                                    width: `${bbox.w * 100}%`,
-                                    height: `${bbox.h * 100}%`
-                                  }}
-                                />
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {showLegacyFlow ? (
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                          Legacy candidates
-                        </p>
-                        <button
-                          type="button"
-                          onClick={handleRefreshTrackCandidates}
-                          disabled={loadingTrackCandidates}
-                          className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
-                        </button>
-                      </div>
-                      {autodetectLowCoverage ? (
-                        <div className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
-                          Low coverage – pick the best match
-                        </div>
-                      ) : null}
-                      {showBestMatchMessage ? (
-                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-200">
-                          Auto-detection found tracks but none met the coverage rule.
-                          Showing best matches anyway.
-                        </div>
-                      ) : null}
-                      {isDetectingPlayers ? (
-                        <div className="flex items-center gap-2 text-sm text-slate-400">
-                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                          <span>
-                            {isProcessingStatus
-                              ? `Detecting players… (${framesProcessedCount} frames processed)`
-                              : "Detecting players..."}
-                          </span>
-                        </div>
-                      ) : null}
-                      {!isDetectingPlayers && loadingTrackCandidates ? (
-                        <div className="flex items-center gap-2 text-sm text-slate-400">
-                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                          <span>Fetching candidates...</span>
-                        </div>
-                      ) : null}
-                      {playerCandidateError ? (
-                        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-                          {playerCandidateError}
-                        </div>
-                      ) : null}
-                      {hasCandidateList ? (
-                        <div className="space-y-4">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                            All tracks
-                          </p>
-                          {trackCandidates.length > 0 ? (
-                            <>
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                  Tabs
-                                </p>
-                                <div className="flex flex-wrap gap-2">
-                                  {secondaryCandidates.length > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setShowSecondaryCandidates((prev) => !prev)
-                                      }
-                                      className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                                    >
-                                      {showSecondaryCandidates
-                                        ? "Show less"
-                                        : "Show more"}
-                                    </button>
-                                  ) : null}
-                                  {otherCandidates.length > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setShowAllCandidates((prev) => {
-                                          const next = !prev;
-                                          if (next) {
-                                            setShowSecondaryCandidates(true);
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                      className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                                    >
-                                      {showAllCandidates ? "Show less" : "Show all"}
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </div>
-
-                              {primaryCandidates.length > 0 ? (
-                                <div className="space-y-3">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                                    Primary
-                                  </p>
-                                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                    {primaryCandidates.map((candidate) => {
-                                      const thumbnailSrc =
-                                        getCandidateThumbnailSrc(candidate);
-                                      const isSelected =
-                                        selectedTrackId === candidate.trackId;
-                                      const isSelecting =
-                                        selectingTrackId === candidate.trackId;
-                                      const hasSelectionData = Boolean(
-                                        getCandidateSelection(candidate)
-                                      );
-                                      const highStability =
-                                        candidate.stability !== null &&
-                                        candidate.stability !== undefined &&
-                                        candidate.stability > 0.85;
-                                      const lowCoverage =
-                                        candidate.coverage !== null &&
-                                        candidate.coverage !== undefined &&
-                                        candidate.coverage < 0.07;
-                                      return (
-                                        <button
-                                          key={candidate.trackId}
-                                          type="button"
-                                          onClick={() => handleReviewCandidate(candidate)}
-                                          disabled={
-                                            isSelecting || isSelected || !hasSelectionData
-                                          }
-                                          aria-pressed={isSelected}
-                                          className={`overflow-hidden rounded-xl border text-left transition ${
-                                            isSelected
-                                              ? "border-emerald-400/60 bg-emerald-500/10"
-                                              : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                          } ${
-                                            isSelecting || isSelected || !hasSelectionData
-                                              ? "cursor-not-allowed"
-                                              : ""
-                                          }`}
-                                        >
-                                          <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                            {thumbnailSrc ? (
-                                              <img
-                                                src={thumbnailSrc}
-                                                alt={`Candidate ${candidate.trackId}`}
-                                                className="h-full w-full object-cover"
-                                                onError={() =>
-                                                  handleCandidateFrameFallback(
-                                                    `candidate-${candidate.trackId}`,
-                                                    candidate.thumbnailUrl
-                                                  )
-                                                }
-                                              />
-                                            ) : (
-                                              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                                No thumbnail
-                                              </div>
-                                            )}
-                                          </div>
-                                          <div className="space-y-3 p-3 text-sm text-slate-200">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                                Track {candidate.trackId}
-                                              </span>
-                                              {isSelected ? (
-                                                <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                  Selected
-                                                </span>
-                                              ) : null}
-                                            </div>
-                                            {(highStability || lowCoverage) && (
-                                              <div className="flex flex-wrap gap-2">
-                                                {highStability ? (
-                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                    High stability
-                                                  </span>
-                                                ) : null}
-                                                {lowCoverage ? (
-                                                  <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                                    Low coverage
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                            )}
-                                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Coverage pct
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatPercent(candidate.coverage)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Stability score
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatScore(candidate.stability)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Avg area
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatMetric(candidate.avgBoxArea)}
-                                                </p>
-                                              </div>
-                                            </div>
-                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                              {isSelecting
-                                                ? "Selecting..."
-                                                : isSelected
-                                                  ? "Selected"
-                                                  : hasSelectionData
-                                                    ? "Review selection"
-                                                    : "Missing selection data"}
-                                            </div>
-                                          </div>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              ) : null}
-
-                              {showSecondaryCandidates && secondaryCandidates.length > 0 ? (
-                                <div className="space-y-3">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                                    Secondary
-                                  </p>
-                                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                    {secondaryCandidates.map((candidate) => {
-                                      const thumbnailSrc =
-                                        getCandidateThumbnailSrc(candidate);
-                                      const isSelected =
-                                        selectedTrackId === candidate.trackId;
-                                      const isSelecting =
-                                        selectingTrackId === candidate.trackId;
-                                      const hasSelectionData = Boolean(
-                                        getCandidateSelection(candidate)
-                                      );
-                                      const highStability =
-                                        candidate.stability !== null &&
-                                        candidate.stability !== undefined &&
-                                        candidate.stability > 0.85;
-                                      const lowCoverage =
-                                        candidate.coverage !== null &&
-                                        candidate.coverage !== undefined &&
-                                        candidate.coverage < 0.07;
-                                      return (
-                                        <button
-                                          key={candidate.trackId}
-                                          type="button"
-                                          onClick={() => handleReviewCandidate(candidate)}
-                                          disabled={
-                                            isSelecting || isSelected || !hasSelectionData
-                                          }
-                                          aria-pressed={isSelected}
-                                          className={`overflow-hidden rounded-xl border text-left transition ${
-                                            isSelected
-                                              ? "border-emerald-400/60 bg-emerald-500/10"
-                                              : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                          } ${
-                                            isSelecting || isSelected || !hasSelectionData
-                                              ? "cursor-not-allowed"
-                                              : ""
-                                          }`}
-                                        >
-                                          <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                            {thumbnailSrc ? (
-                                              <img
-                                                src={thumbnailSrc}
-                                                alt={`Candidate ${candidate.trackId}`}
-                                                className="h-full w-full object-cover"
-                                                onError={() =>
-                                                  handleCandidateFrameFallback(
-                                                    `candidate-${candidate.trackId}`,
-                                                    candidate.thumbnailUrl
-                                                  )
-                                                }
-                                              />
-                                            ) : (
-                                              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                                No thumbnail
-                                              </div>
-                                            )}
-                                          </div>
-                                          <div className="space-y-3 p-3 text-sm text-slate-200">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                                Track {candidate.trackId}
-                                              </span>
-                                              {isSelected ? (
-                                                <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                  Selected
-                                                </span>
-                                              ) : null}
-                                            </div>
-                                            {(highStability || lowCoverage) && (
-                                              <div className="flex flex-wrap gap-2">
-                                                {highStability ? (
-                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                    High stability
-                                                  </span>
-                                                ) : null}
-                                                {lowCoverage ? (
-                                                  <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                                    Low coverage
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                            )}
-                                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Coverage pct
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatPercent(candidate.coverage)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Stability score
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatScore(candidate.stability)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Avg area
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatMetric(candidate.avgBoxArea)}
-                                                </p>
-                                              </div>
-                                            </div>
-                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                              {isSelecting
-                                                ? "Selecting..."
-                                                : isSelected
-                                                  ? "Selected"
-                                                  : hasSelectionData
-                                                    ? "Review selection"
-                                                    : "Missing selection data"}
-                                            </div>
-                                          </div>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              ) : null}
-
-                              {showAllCandidates && otherCandidates.length > 0 ? (
-                                <div className="space-y-3">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                                    Others
-                                  </p>
-                                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                    {otherCandidates.map((candidate) => {
-                                      const thumbnailSrc =
-                                        getCandidateThumbnailSrc(candidate);
-                                      const isSelected =
-                                        selectedTrackId === candidate.trackId;
-                                      const isSelecting =
-                                        selectingTrackId === candidate.trackId;
-                                      const hasSelectionData = Boolean(
-                                        getCandidateSelection(candidate)
-                                      );
-                                      const highStability =
-                                        candidate.stability !== null &&
-                                        candidate.stability !== undefined &&
-                                        candidate.stability > 0.85;
-                                      const lowCoverage =
-                                        candidate.coverage !== null &&
-                                        candidate.coverage !== undefined &&
-                                        candidate.coverage < 0.07;
-                                      return (
-                                        <button
-                                          key={candidate.trackId}
-                                          type="button"
-                                          onClick={() => handleReviewCandidate(candidate)}
-                                          disabled={
-                                            isSelecting || isSelected || !hasSelectionData
-                                          }
-                                          aria-pressed={isSelected}
-                                          className={`overflow-hidden rounded-xl border text-left transition ${
-                                            isSelected
-                                              ? "border-emerald-400/60 bg-emerald-500/10"
-                                              : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                          } ${
-                                            isSelecting || isSelected || !hasSelectionData
-                                              ? "cursor-not-allowed"
-                                              : ""
-                                          }`}
-                                        >
-                                          <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                            {thumbnailSrc ? (
-                                              <img
-                                                src={thumbnailSrc}
-                                                alt={`Candidate ${candidate.trackId}`}
-                                                className="h-full w-full object-cover"
-                                                onError={() =>
-                                                  handleCandidateFrameFallback(
-                                                    `candidate-${candidate.trackId}`,
-                                                    candidate.thumbnailUrl
-                                                  )
-                                                }
-                                              />
-                                            ) : (
-                                              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                                No thumbnail
-                                              </div>
-                                            )}
-                                          </div>
-                                          <div className="space-y-3 p-3 text-sm text-slate-200">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                                Track {candidate.trackId}
-                                              </span>
-                                              {isSelected ? (
-                                                <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                  Selected
-                                                </span>
-                                              ) : null}
-                                            </div>
-                                            {(highStability || lowCoverage) && (
-                                              <div className="flex flex-wrap gap-2">
-                                                {highStability ? (
-                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                    High stability
-                                                  </span>
-                                                ) : null}
-                                                {lowCoverage ? (
-                                                  <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                                    Low coverage
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                            )}
-                                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Coverage pct
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatPercent(candidate.coverage)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Stability score
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatScore(candidate.stability)}
-                                                </p>
-                                              </div>
-                                              <div>
-                                                <p className="uppercase tracking-[0.2em] text-slate-500">
-                                                  Avg area
-                                                </p>
-                                                <p className="mt-1 text-sm text-slate-200">
-                                                  {formatMetric(candidate.avgBoxArea)}
-                                                </p>
-                                              </div>
-                                            </div>
-                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                              {isSelecting
-                                                ? "Selecting..."
-                                                : isSelected
-                                                  ? "Selected"
-                                                  : hasSelectionData
-                                                    ? "Review selection"
-                                                    : "Missing selection data"}
-                                            </div>
-                                          </div>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              ) : null}
-                            </>
-                          ) : null}
-
-                          {fallbackCandidates.length > 0 ? (
-                            <div className="space-y-3">
-                              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                                Best matches (top)
-                              </p>
-                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                {fallbackCandidates.map((candidate) => {
-                                  const thumbnailSrc =
-                                    getCandidateThumbnailSrc(candidate);
-                                  const isSelected =
-                                    selectedTrackId === candidate.trackId;
-                                  const isSelecting =
-                                    selectingTrackId === candidate.trackId;
-                                  const hasSelectionData = Boolean(
-                                    getCandidateSelection(candidate)
-                                  );
-                                  const highStability =
-                                    candidate.stability !== null &&
-                                    candidate.stability !== undefined &&
-                                    candidate.stability > 0.85;
-                                  const lowCoverage =
-                                    candidate.coverage !== null &&
-                                    candidate.coverage !== undefined &&
-                                    candidate.coverage < 0.07;
-                                  return (
-                                    <button
-                                      key={candidate.trackId}
-                                      type="button"
-                                      onClick={() => handleReviewCandidate(candidate)}
-                                      disabled={
-                                        isSelecting || isSelected || !hasSelectionData
-                                      }
-                                      aria-pressed={isSelected}
-                                      className={`overflow-hidden rounded-xl border text-left transition ${
-                                        isSelected
-                                          ? "border-emerald-400/60 bg-emerald-500/10"
-                                          : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
-                                      } ${
-                                        isSelecting || isSelected || !hasSelectionData
-                                          ? "cursor-not-allowed"
-                                          : ""
-                                      }`}
-                                    >
-                                      <div className="h-32 w-full overflow-hidden bg-slate-900">
-                                        {thumbnailSrc ? (
-                                          <img
-                                            src={thumbnailSrc}
-                                            alt={`Candidate ${candidate.trackId}`}
-                                            className="h-full w-full object-cover"
-                                            onError={() =>
-                                              handleCandidateFrameFallback(
-                                                `candidate-${candidate.trackId}`,
-                                                candidate.thumbnailUrl
-                                              )
-                                            }
-                                          />
-                                        ) : (
-                                          <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                                            No thumbnail
-                                          </div>
-                                        )}
-                                      </div>
-                                      <div className="space-y-3 p-3 text-sm text-slate-200">
-                                        <div className="flex items-center justify-between gap-2">
-                                          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                            Track {candidate.trackId}
-                                          </span>
-                                          {isSelected ? (
-                                            <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                              Selected
-                                            </span>
-                                          ) : null}
-                                        </div>
-                                        {(highStability || lowCoverage) && (
-                                          <div className="flex flex-wrap gap-2">
-                                            {highStability ? (
-                                              <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                                High stability
-                                              </span>
-                                            ) : null}
-                                            {lowCoverage ? (
-                                              <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                                                Low coverage
-                                              </span>
-                                            ) : null}
-                                          </div>
-                                        )}
-                                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                                          <div>
-                                            <p className="uppercase tracking-[0.2em] text-slate-500">
-                                              Coverage pct
-                                            </p>
-                                            <p className="mt-1 text-sm text-slate-200">
-                                              {formatPercent(candidate.coverage)}
-                                            </p>
-                                          </div>
-                                          <div>
-                                            <p className="uppercase tracking-[0.2em] text-slate-500">
-                                              Stability score
-                                            </p>
-                                            <p className="mt-1 text-sm text-slate-200">
-                                              {formatScore(candidate.stability)}
-                                            </p>
-                                          </div>
-                                          <div>
-                                            <p className="uppercase tracking-[0.2em] text-slate-500">
-                                              Avg area
-                                            </p>
-                                            <p className="mt-1 text-sm text-slate-200">
-                                              {formatMetric(candidate.avgBoxArea)}
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                          {isSelecting
-                                            ? "Selecting..."
-                                            : isSelected
-                                              ? "Selected"
-                                              : hasSelectionData
-                                                ? "Review selection"
-                                                : "Missing selection data"}
-                                        </div>
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : null}
-                          {candidateReview ? (
-                            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div>
-                                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                                    Review selection
-                                  </p>
-                                  <p className="mt-1 text-sm text-slate-200">
-                                    Track {candidateReview.trackId}: verifica i
-                                    sample frame prima di confermare.
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setCandidateReview(null)}
-                                  className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
-                                >
-                                  Close
-                                </button>
-                              </div>
-                              {reviewPreviewFrames.length > 0 ? (
-                                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                                  {reviewPreviewFrames.map((frame, index) => {
-                                    const frameSrc = getCandidateSampleFrameSrc(
-                                      frame.imageUrl ?? null
-                                    );
-                                    const bbox = resolveCandidateBox(
-                                      frame ?? null,
-                                      candidateReview
-                                    );
-                                    return (
-                                      <div
-                                        key={`${candidateReview.trackId}-${index}`}
-                                        className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-900"
-                                      >
-                                        {frameSrc ? (
-                                          <img
-                                            src={frameSrc}
-                                            alt={`Sample frame ${index + 1}`}
-                                            className="h-28 w-full object-cover"
-                                            onError={() =>
-                                              handleCandidateFrameFallback(
-                                                "candidate-sample",
-                                                frame.imageUrl
-                                              )
-                                            }
-                                          />
-                                        ) : (
-                                          <div className="flex h-28 items-center justify-center text-xs text-slate-500">
-                                            No frame
-                                          </div>
-                                        )}
-                                        {bbox ? (
-                                          <div
-                                            className="absolute rounded border border-emerald-400 bg-emerald-400/20"
-                                            style={{
-                                              left: `${bbox.x * 100}%`,
-                                              top: `${bbox.y * 100}%`,
-                                              width: `${bbox.w * 100}%`,
-                                              height: `${bbox.h * 100}%`
-                                            }}
-                                          />
-                                        ) : null}
-                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/40 to-transparent px-2 py-1">
-                                          <p className="text-[0.6rem] uppercase tracking-[0.2em] text-slate-200">
-                                            t={formatFrameTime(
-                                              frame.frameTimeSec ?? null
-                                            )}
-                                          </p>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <p className="mt-3 text-xs text-slate-500">
-                                  Sample frames non disponibili per questa traccia.
-                                </p>
-                              )}
-                              <div className="mt-4 flex flex-wrap items-center gap-3">
-                                <button
-                                  type="button"
-                                  onClick={() => handleSelectTrack(candidateReview)}
-                                  disabled={selectingTrackId === candidateReview.trackId}
-                                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {selectingTrackId === candidateReview.trackId
-                                    ? "Selecting..."
-                                    : "Track this player"}
-                                </button>
-                                <span className="text-xs text-slate-500">
-                                  Conferma dopo aver controllato i bounding box.
-                                </span>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : isDetectingPlayers ? null : showManualPlayerFallback ? (
-                        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                          {manualFallbackMessage}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                          Manual selection available. Pick a frame above to draw a box.
-                        </div>
-                      )}
-                    </>
-                  ) : null}
-                  {showLegacyFlow ? null : isDetectingPlayers ? null : showManualPlayerFallback ? (
-                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                      {manualFallbackMessage}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                      Manual selection available. Pick a frame above to draw a box.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-slate-400">
-                  Player selected. Continue with target selection.
-                </p>
-              )}
-            </div>
-          ) : null}
-          {hasPreviewFrameErrors ? (
-            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-              <p>
-                Images blocked or failed to load. Check the frame proxy or mixed
-                content settings.
-              </p>
-              {imageLoadFailures.length > 0 ? (
-                <div className="mt-2 space-y-1 text-[11px] text-amber-100">
-                  {imageLoadFailures.map((failure, index) => (
-                    <div key={`${failure.context}-${failure.url}-${index}`}>
-                      <span className="font-semibold">
-                        {failure.status !== null ? `HTTP ${failure.status}` : "HTTP ?"}
-                      </span>
-                      {` · ${failure.context}`}
-                      <div className="break-all text-amber-200/90">
-                        {failure.url}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {jobId ? (
-            canShowFrameSelector ? (
-              <FrameSelector key={frameSelectorKey}>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm text-slate-400">
-                    {gridMode === "player-ref"
-                      ? "Manual fallback: click a frame to draw a bounding box around the player."
-                      : "Click a preview frame to draw a bounding box around the target."}
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                    Step
                   </p>
-                  {gridMode === "target" &&
-                  previewPollingActive &&
-                  frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
-                    <span className="text-xs text-slate-500">
-                      {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
-                    </span>
-                  ) : null}
+                  <p className="mt-2 text-sm text-slate-200">{step}</p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {job?.progress?.message ?? "No message"}
+                  </p>
                 </div>
-                {previewFramesMissingUrls ? (
-                  <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                    Preview frames ricevuti ma senza URL immagine. Verifica backend:
-                    aggiungere signed_url/image_url.
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Frames processed
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      {framesProcessedCount}
+                    </p>
                   </div>
-                ) : (
-                  <div className={previewGridClassName}>
-                    {frameSelectorFrames.map((frame, index) => (
-                      <button
-                        key={`${frame.key}-${index}`}
-                        type="button"
-                        onClick={() => handleOpenPreview(frame, gridMode)}
-                        className={`group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 text-left transition ${
-                          gridMode === "target"
-                            ? "hover:border-amber-300/70"
-                            : "hover:border-emerald-400/60"
-                        }`}
-                      >
-                        {previewImageErrors[frame.key] ? (
-                          <div className="flex h-32 w-full items-center justify-center bg-slate-900 text-xs text-slate-400">
-                            Image blocked
-                          </div>
-                        ) : (
-                          <img
-                            src={getPreviewFrameSrc(frame)}
-                            alt={formatFrameAlt(frame.timeSec)}
-                            className="h-32 w-full object-cover"
-                            loading="lazy"
-                            decoding="async"
-                            onLoad={() => handlePreviewImageLoad(frame)}
-                            onError={() => handlePreviewFrameFallback(frame, "player-grid")}
-                          />
-                        )}
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-transparent px-3 py-2">
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-200">
-                            t={formatFrameTime(frame.timeSec)}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Created
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      {job?.createdAt ?? "—"}
+                    </p>
                   </div>
-                )}
-                <p className="text-xs text-slate-500">
-                  You will be asked to draw one bounding box in the full-size view.
-                </p>
-              </FrameSelector>
-            ) : (
-              <div className="space-y-3 text-sm text-slate-400">
-                {playerRef ? (
-                  <p>Player reference already saved.</p>
-                ) : isCandidatesFailed && !hasAnyPreviewFrames ? (
-                  <>
-                    <p className="text-sm text-rose-200">
-                      Preview frames not available.
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Updated
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      {job?.updatedAt ?? "—"}
+                    </p>
+                  </div>
+                </div>
+
+                {job?.error ? (
+                  <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                    {job.error}
+                  </div>
+                ) : null}
+
+                {hasWarnings ? (
+                  <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-100">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                      Warnings
+                    </p>
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-amber-100">
+                      {warningMessages.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {pollingTimedOut ? (
+                  <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+                    <p className="font-semibold text-amber-100">
+                      This is taking longer than expected.
                     </p>
                     <button
                       type="button"
-                      onClick={handleRetryPreviewExtraction}
-                      className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200"
+                      onClick={handleRestartJob}
+                      className="mt-3 inline-flex items-center rounded-lg border border-amber-300/40 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:border-amber-200"
                     >
-                      Retry preview extraction
+                      Restart job
                     </button>
-                  </>
-                ) : previewFramesMissingUrls ? (
-                  <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
-                    Preview frames ricevuti ma senza URL immagine. Verifica backend:
-                    aggiungere signed_url/image_url.
                   </div>
-                ) : hasAnyPreviewFrames ? (
-                  <p className="text-sm text-slate-400">
-                    Preview frames ready. Select target to continue.
-                  </p>
-                ) : isProcessingStatus ? (
-                  <div className="space-y-2 text-sm text-slate-400">
-                    <div className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Preparing frames...</span>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      {`${framesProcessedCount} frames processed`}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
-                      <span>Preparing frames...</span>
-                    </div>
-                    {previewPollingError ? (
-                      <p className="text-xs text-rose-200">{previewPollingError}</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={
-                        previewPollingError
-                          ? handleRetryPreviewPolling
-                          : handleRefreshJob
-                      }
-                      disabled={previewPollingError ? false : refreshingFrames}
-                      className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {previewPollingError
-                        ? "Retry polling"
-                        : refreshingFrames
-                        ? "Refreshing..."
-                        : "Retry"}
-                    </button>
-                  </>
-                )}
-              </div>
-            )
-          ) : (
-            <div className="space-y-3 text-sm text-slate-400">
-              <p>Create a job to load preview frames.</p>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section
-        ref={analysisSectionRef}
-        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
-      >
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Analysis</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Monitor the selected player analysis and results.
-            </p>
-          </div>
-          {analysisTrackId ? (
-            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-300">
-              Track #{analysisTrackId}
-            </span>
-          ) : null}
-        </div>
-
-        <div className="mt-6 space-y-4">
-          {!analysisTrackId ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
-              Click a bounding box in the overlay frames to start analyzing a
-              player.
-            </div>
-          ) : null}
-
-          {analysisTrackId ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    Status
-                  </p>
-                  <p className="mt-1 text-sm text-slate-200">
-                    {analysisRequesting
-                      ? "Starting analysis..."
-                      : analysisStatus ?? "Waiting"}
-                  </p>
-                </div>
-                {analysisFrameKey ? (
-                  <span className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-400">
-                    Frame {analysisFrameKey}
-                  </span>
                 ) : null}
               </div>
+            </section>
 
-              {analysisIsRunning ? (
-                <div className="mt-4 space-y-3">
-                  <ProgressBar pct={analysisProgressPct} />
-                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200">
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                      Step
-                    </p>
-                    <p className="mt-2">{analysisStep}</p>
-                    {analysisMessage ? (
-                      <p className="mt-2 text-xs text-slate-500">
-                        {analysisMessage}
-                      </p>
-                    ) : null}
-                  </div>
+            <section className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6 shadow-lg shadow-slate-950/30 backdrop-blur-sm">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-300">
+                Actions
+              </h3>
+              <div className="mt-4 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={handleStopPolling}
+                  disabled={!polling}
+                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Stop polling
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500"
+                >
+                  Reset
+                </button>
+              </div>
+            </section>
+
+            <DebugPanel>
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-[11px] text-slate-300">
+                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
+                  Preview debug
+                </p>
+                <div className="mt-2 grid gap-1">
+                  <span>Status: {job?.status ?? "—"}</span>
+                  <span>Step: {job?.progress?.step ?? "—"}</span>
+                  <span>Frames (payload): {job?.previewFrames?.length ?? 0}</span>
+                  <span>Frames (list): {previewFrames.length}</span>
+                  <span>Frames (resolved): {resolvedPreviewFrames.length}</span>
+                  <span>Frames (overlayGallery): {overlayGalleryFrames.length}</span>
+                  <span>Frames (api items): {framesApiCount ?? 0}</span>
+                  <span>Frames error: {previewError || "—"}</span>
+                  <span>Image errors: {previewImageErrorCount}</span>
+                  <span>Warnings: {warningMessages.length}</span>
+                  <span>Warnings(raw): {JSON.stringify(warningMessages)}</span>
+                  <span>Clips: {clipsCount}</span>
+                  <span>hasInputVideoUrl: {String(Boolean(inputVideoUrl))}</span>
+                  <span>Radar keys: {radarKeysCount}</span>
+                  <span>playerSaved: {String(playerSaved)}</span>
+                  <span>targetSaved: {String(targetSaved)}</span>
+                  <span>
+                    playerRef(raw):{" "}
+                    {JSON.stringify(
+                      (job as any)?.playerRefRaw ??
+                        (job as any)?.player_ref ??
+                        (job as any)?.playerRef ??
+                        job?.result?.player_ref ??
+                        job?.result?.playerRef ??
+                        null
+                    )}
+                  </span>
+                  <span>
+                    target(raw):{" "}
+                    {JSON.stringify(job?.target ?? (job as any)?.data?.target ?? null)}
+                  </span>
                 </div>
-              ) : null}
-            </div>
-          ) : null}
+              </div>
+            </DebugPanel>
+          </div>
+        }
+      >
+        <StepCard
+          title="Upload"
+          description="Provide the details for a new analysis request."
+          badge={<StatusPill className="border border-blue-500/40 bg-blue-500/10 text-blue-200">Step 1</StatusPill>}
+          isActive={wizardStep === 1}
+          summary={
+            jobId ? (
+              <span>Job {jobId} created. Continue with player selection.</span>
+            ) : (
+              <span>Submit a video source to create a new job.</span>
+            )
+          }
+        >
+          <div className="space-y-4">
+            <label className="block text-sm text-slate-300">
+              Video URL (http/https) or MinIO Object Key
+              <textarea
+                value={videoUrl}
+                onChange={(event) => setVideoUrl(event.target.value)}
+                className="mt-2 h-24 w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none"
+                placeholder="https://..."
+              />
+            </label>
 
-          {analysisError ? (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-              <p>{analysisError}</p>
-              <button
-                type="button"
-                onClick={handleRetryAnalysisPolling}
-                className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
+            <label className="block text-sm text-slate-300">
+              Role
+              <select
+                value={role}
+                onChange={(event) => setRole(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
               >
-                Retry
-              </button>
-            </div>
-          ) : null}
-
-          {analysisIsFinal && analysisJob?.result ? (
-            <ResultView job={analysisJob} />
-          ) : null}
-          {analysisIsFinal && analysisJob && !analysisJob.result ? (
-            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
-              Analysis completed but no result payload was returned.
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Job Progress</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Monitor processing status and output.
-            </p>
-          </div>
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${statusClass}`}
-          >
-            {demoStatusLabel}
-          </span>
-        </div>
-
-        <div className="mt-6 space-y-4">
-          <ProgressBar pct={pct} />
-          {effectiveStep === "TARGET" || effectiveStep === "PLAYER" ? (
-            <button
-              type="button"
-              onClick={handleFocusStep}
-              disabled={effectiveStep === "PLAYER" && isProcessingWithoutCandidates}
-              className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-left text-sm font-semibold text-amber-200 transition hover:border-amber-300/60 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {effectiveStep === "TARGET"
-                ? "Select target now"
-                : playerCtaLabel}
-            </button>
-          ) : null}
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Step
-            </p>
-            <p className="mt-2 text-sm text-slate-200">
-              {step}
-            </p>
-            <p className="mt-2 text-xs text-slate-500">
-              {job?.progress?.message ?? "No message"}
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Frames processed
-              </p>
-              <p className="mt-2 text-sm text-slate-200">
-                {framesProcessedCount}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Created
-              </p>
-              <p className="mt-2 text-sm text-slate-200">
-                {job?.createdAt ?? "—"}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Updated
-              </p>
-              <p className="mt-2 text-sm text-slate-200">
-                {job?.updatedAt ?? "—"}
-              </p>
-            </div>
-          </div>
-
-          {job?.error ? (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-              {job.error}
-            </div>
-          ) : null}
-
-          {hasWarnings ? (
-            <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-100">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
-                Warnings
-              </p>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-amber-100">
-                {warningMessages.map((warning) => (
-                  <li key={warning}>{warning}</li>
+                {roles.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
                 ))}
-              </ul>
-            </div>
-          ) : null}
+              </select>
+            </label>
 
-          {pollingTimedOut ? (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
-              <p className="font-semibold text-amber-100">
-                This is taking longer than expected.
-              </p>
-              <button
-                type="button"
-                onClick={handleRestartJob}
-                className="mt-3 inline-flex items-center rounded-lg border border-amber-300/40 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:border-amber-200"
-              >
-                Restart job
-              </button>
-            </div>
-          ) : null}
+            <label className="block text-sm text-slate-300">
+              Category
+              <input
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+
+            <label className="block text-sm text-slate-300">
+              Team name <span className="text-xs text-slate-500">(optional)</span>
+              <input
+                value={teamName}
+                onChange={(event) => setTeamName(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                placeholder="e.g. Home team"
+              />
+            </label>
+
+            <label className="block text-sm text-slate-300">
+              Shirt number <span className="text-xs text-slate-500">(optional)</span>
+              <input
+                type="number"
+                value={shirtNumber}
+                onChange={(event) => setShirtNumber(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                placeholder="e.g. 9"
+              />
+            </label>
+          </div>
 
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handleStopPolling}
-              disabled={!polling}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Stop polling
-            </button>
+            <PrimaryButton onClick={handleCreateJob} disabled={submitting}>
+              {submitting ? "Creating..." : "Create Job"}
+            </PrimaryButton>
             <button
               type="button"
               onClick={handleReset}
@@ -4257,94 +2934,1360 @@ export default function JobRunner() {
               Reset
             </button>
           </div>
-        </div>
 
-        {jobId ? (
-          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <h3 className="text-lg font-semibold text-white">Target</h3>
-                <p className="text-sm text-slate-400">
-                  {targetSaved ? "Target saved" : "Missing target"}
-                </p>
-              </div>
-              {gridMode === "target" ? (
-                <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
-                  Target mode on
-                </span>
-              ) : null}
-            </div>
-
-            <div className="mt-4 flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={handleSelectTargetFromFrames}
-                disabled={!hasAnyPreviewFrames}
-                className="rounded-lg border border-amber-300/40 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+          {jobId ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Job Created
+              </p>
+              <p className="mt-2 text-sm text-slate-200">ID: {jobId}</p>
+              <PrimaryButton
+                onClick={handleEnqueue}
+                disabled={!canEnqueue || submitting}
+                aria-disabled={!canEnqueue || submitting}
+                className={
+                  !canEnqueue || submitting ? "cursor-not-allowed opacity-50" : ""
+                }
               >
-                Select target from frames
-              </button>
-              {playerRefTimeSec != null ? (
+                {submitting ? "Starting..." : "Start analysis"}
+              </PrimaryButton>
+              <p className="mt-2 text-xs text-slate-500">{enqueueHint}</p>
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+              <p>{error}</p>
+              {jobId ? (
                 <button
                   type="button"
-                  onClick={handleUsePlayerFrameForTarget}
-                  disabled={!hasAnyPreviewFrames}
-                  className="rounded-lg border border-emerald-400/40 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={handleRetryJobPolling}
+                  className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
                 >
-                  Use same frame as player
+                  Retry
                 </button>
               ) : null}
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSaveSelection}
-                  disabled={targetSelectionsEmpty}
-                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {savingSelection ? "Confirming..." : "Confirm target"}
-                </button>
-                <span className="text-xs text-slate-500">
-                  {targetMissingTime
-                    ? "Frame missing time_sec."
-                    : targetInvalidReason
-                    ? targetInvalidReason
-                    : draftTargetSelection
-                    ? "Ready to confirm selection."
-                    : "Select one box to continue."}
-                </span>
-              </div>
             </div>
+          ) : null}
+        </StepCard>
 
-            {selectionError ? (
-              <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-                {selectionError}
-                {selectionRequestId ? (
-                  <div className="mt-2 text-[11px] text-rose-100/80">
-                    request_id: {selectionRequestId}
+        <div ref={playerSectionRef}>
+          <StepCard
+            title="Player"
+            description="Choose the player to track before processing continues."
+            badge={<StatusPill className="border border-emerald-400/40 bg-emerald-500/10 text-emerald-200">Step 2</StatusPill>}
+            isActive={wizardStep === 2}
+            summary={
+              hasPlayerRef ? (
+                <span>Player reference saved. Move to target selection.</span>
+              ) : hasFramesList ? (
+                <span>{playerCtaLabel}</span>
+              ) : (
+                <span>Waiting for preview frames.</span>
+              )
+            }
+          >
+            {jobId ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Player selection
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      Select an AI-detected candidate to save the player reference.
+                    </p>
+                  </div>
+                </div>
+
+                {showPlayerSection ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                            AI-detected player candidates
+                          </p>
+                          <p className="mt-1 text-sm text-slate-200">
+                            Click a frame to accept the suggested player box.
+                          </p>
+                        </div>
+                      </div>
+
+                      {previewError ? (
+                        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                          {previewError}
+                        </div>
+                      ) : null}
+                      {previewPollingActive &&
+                      overlayGalleryFrames.length === 0 &&
+                      !previewError ? (
+                        <div className="flex items-center gap-2 text-sm text-slate-400">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                          <span>Preparing frames...</span>
+                        </div>
+                      ) : previewError ? null : (
+                        <OverlayFramesGallery
+                          frames={overlayGalleryFrames}
+                          getFrameSrc={getPreviewFrameSrc}
+                          disabled={analysisRequesting}
+                          onFrameError={(frame) =>
+                            handlePreviewFrameFallback(frame, "overlay-gallery")
+                          }
+                          onSelectFrame={(frame) => {
+                            const trackId = frame.tracks?.[0]?.trackId ?? null;
+                            const candidate =
+                              trackId !== null
+                                ? trackCandidates.find(
+                                    (item) => item.trackId === trackId
+                                  ) ??
+                                  fallbackCandidates.find(
+                                    (item) => item.trackId === trackId
+                                  ) ??
+                                  null
+                                : null;
+                            void handleSelectCandidateFrame(frame, candidate);
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {hasCandidateList ? (
+                      <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                            AI-detected player candidates
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleRefreshTrackCandidates}
+                            disabled={loadingTrackCandidates}
+                            className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
+                          </button>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {candidatePreviewList.map((candidate) => {
+                            const sampleFrames =
+                              candidate.sampleFrames?.filter((frame) => frame.imageUrl) ??
+                              [];
+                            const previewFrames =
+                              sampleFrames.length > 0
+                                ? sampleFrames.slice(0, 3)
+                                : candidate.thumbnailUrl
+                                  ? [
+                                      {
+                                        imageUrl: candidate.thumbnailUrl,
+                                        x: candidate.x ?? null,
+                                        y: candidate.y ?? null,
+                                        w: candidate.w ?? null,
+                                        h: candidate.h ?? null
+                                      }
+                                    ]
+                                  : [];
+                            const isSelecting =
+                              selectingTrackId === candidate.trackId;
+                            return (
+                              <div
+                                key={candidate.trackId}
+                                className="rounded-xl border border-slate-800 bg-slate-950 p-3"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                    Track {candidate.trackId}
+                                  </span>
+                                  {isSelecting ? (
+                                    <span className="text-[0.65rem] uppercase tracking-[0.2em] text-emerald-200">
+                                      Selecting...
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="mt-3 grid gap-2 text-xs text-slate-400">
+                                  <div className="flex items-center justify-between">
+                                    <span className="uppercase tracking-[0.2em] text-slate-500">
+                                      Coverage pct
+                                    </span>
+                                    <span className="text-sm text-slate-200">
+                                      {formatPercent(candidate.coverage)}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="uppercase tracking-[0.2em] text-slate-500">
+                                      Stability score
+                                    </span>
+                                    <span className="text-sm text-slate-200">
+                                      {formatScore(candidate.stability)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                  {previewFrames.length > 0 ? (
+                                    previewFrames.map((frame, index) => {
+                                      const frameSrc = getCandidateSampleFrameSrc(
+                                        frame.imageUrl ?? null
+                                      );
+                                      const bbox = resolveCandidateBox(
+                                        frame,
+                                        candidate
+                                      );
+                                      return (
+                                        <button
+                                          key={`${candidate.trackId}-sample-${index}`}
+                                          type="button"
+                                          onClick={() =>
+                                            handleSelectCandidateSampleFrame(
+                                              candidate,
+                                              frame
+                                            )
+                                          }
+                                          disabled={isSelecting}
+                                          className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                          {frameSrc ? (
+                                            <img
+                                              src={frameSrc}
+                                              alt={`Candidate ${candidate.trackId} sample ${index + 1}`}
+                                              className="h-20 w-full object-cover"
+                                              onError={() =>
+                                                handleCandidateFrameFallback(
+                                                  "candidate-sample",
+                                                  frame.imageUrl
+                                                )
+                                              }
+                                            />
+                                          ) : (
+                                            <div className="flex h-20 w-full items-center justify-center text-xs text-slate-500">
+                                              No sample
+                                            </div>
+                                          )}
+                                          {bbox ? (
+                                            <div
+                                              className="absolute rounded border border-emerald-300 bg-emerald-400/20"
+                                              style={{
+                                                left: `${bbox.x * 100}%`,
+                                                top: `${bbox.y * 100}%`,
+                                                width: `${bbox.w * 100}%`,
+                                                height: `${bbox.h * 100}%`
+                                              }}
+                                            />
+                                          ) : null}
+                                        </button>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="col-span-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-500">
+                                      No sample frames available.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {showLegacyFlow ? (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                            Legacy candidates
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleRefreshTrackCandidates}
+                            disabled={loadingTrackCandidates}
+                            className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {loadingTrackCandidates ? "Refreshing..." : "Refresh"}
+                          </button>
+                        </div>
+                        {autodetectLowCoverage ? (
+                          <div className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                            Low coverage – pick the best match
+                          </div>
+                        ) : null}
+                        {showBestMatchMessage ? (
+                          <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3 text-xs text-slate-200">
+                            Auto-detection found tracks but none met the coverage rule.
+                            Showing best matches anyway.
+                          </div>
+                        ) : null}
+                        {isDetectingPlayers ? (
+                          <div className="flex items-center gap-2 text-sm text-slate-400">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                            <span>
+                              {isProcessingStatus
+                                ? `Detecting players… (${framesProcessedCount} frames processed)`
+                                : "Detecting players..."}
+                            </span>
+                          </div>
+                        ) : null}
+                        {!isDetectingPlayers && loadingTrackCandidates ? (
+                          <div className="flex items-center gap-2 text-sm text-slate-400">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                            <span>Fetching candidates...</span>
+                          </div>
+                        ) : null}
+                        {playerCandidateError ? (
+                          <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                            {playerCandidateError}
+                          </div>
+                        ) : null}
+                        {hasCandidateList ? (
+                          <div className="space-y-4">
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                              All tracks
+                            </p>
+                            {trackCandidates.length > 0 ? (
+                              <>
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                    Tabs
+                                  </p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {secondaryCandidates.length > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setShowSecondaryCandidates((prev) => !prev)
+                                        }
+                                        className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                                      >
+                                        {showSecondaryCandidates
+                                          ? "Show less"
+                                          : "Show more"}
+                                      </button>
+                                    ) : null}
+                                    {otherCandidates.length > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setShowAllCandidates((prev) => {
+                                            const next = !prev;
+                                            if (next) {
+                                              setShowSecondaryCandidates(true);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                                      >
+                                        {showAllCandidates ? "Show less" : "Show all"}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+
+                                {primaryCandidates.length > 0 ? (
+                                  <div className="space-y-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                      Primary
+                                    </p>
+                                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                      {primaryCandidates.map((candidate) => {
+                                        const thumbnailSrc =
+                                          getCandidateThumbnailSrc(candidate);
+                                        const isSelected =
+                                          selectedTrackId === candidate.trackId;
+                                        const isSelecting =
+                                          selectingTrackId === candidate.trackId;
+                                        const hasSelectionData = Boolean(
+                                          getCandidateSelection(candidate)
+                                        );
+                                        const highStability =
+                                          candidate.stability !== null &&
+                                          candidate.stability !== undefined &&
+                                          candidate.stability > 0.85;
+                                        const lowCoverage =
+                                          candidate.coverage !== null &&
+                                          candidate.coverage !== undefined &&
+                                          candidate.coverage < 0.07;
+                                        return (
+                                          <button
+                                            key={candidate.trackId}
+                                            type="button"
+                                            onClick={() => handleReviewCandidate(candidate)}
+                                            disabled={
+                                              isSelecting || isSelected || !hasSelectionData
+                                            }
+                                            aria-pressed={isSelected}
+                                            className={`overflow-hidden rounded-xl border text-left transition ${
+                                              isSelected
+                                                ? "border-emerald-400/60 bg-emerald-500/10"
+                                                : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                            } ${
+                                              isSelecting || isSelected || !hasSelectionData
+                                                ? "cursor-not-allowed"
+                                                : ""
+                                            }`}
+                                          >
+                                            <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                              {thumbnailSrc ? (
+                                                <img
+                                                  src={thumbnailSrc}
+                                                  alt={`Candidate ${candidate.trackId}`}
+                                                  className="h-full w-full object-cover"
+                                                  onError={() =>
+                                                    handleCandidateFrameFallback(
+                                                      `candidate-${candidate.trackId}`,
+                                                      candidate.thumbnailUrl
+                                                    )
+                                                  }
+                                                />
+                                              ) : (
+                                                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                                  No thumbnail
+                                                </div>
+                                              )}
+                                            </div>
+                                            <div className="space-y-3 p-3 text-sm text-slate-200">
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                                  Track {candidate.trackId}
+                                                </span>
+                                                {isSelected ? (
+                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                    Selected
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                              {(highStability || lowCoverage) && (
+                                                <div className="flex flex-wrap gap-2">
+                                                  {highStability ? (
+                                                    <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                      High stability
+                                                    </span>
+                                                  ) : null}
+                                                  {lowCoverage ? (
+                                                    <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                      Low coverage
+                                                    </span>
+                                                  ) : null}
+                                                </div>
+                                              )}
+                                              <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Coverage pct
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatPercent(candidate.coverage)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Stability score
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatScore(candidate.stability)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Avg area
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatMetric(candidate.avgBoxArea)}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                                {isSelecting
+                                                  ? "Selecting..."
+                                                  : isSelected
+                                                    ? "Selected"
+                                                    : hasSelectionData
+                                                      ? "Review selection"
+                                                      : "Missing selection data"}
+                                              </div>
+                                            </div>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {showSecondaryCandidates && secondaryCandidates.length > 0 ? (
+                                  <div className="space-y-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                      Secondary
+                                    </p>
+                                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                      {secondaryCandidates.map((candidate) => {
+                                        const thumbnailSrc =
+                                          getCandidateThumbnailSrc(candidate);
+                                        const isSelected =
+                                          selectedTrackId === candidate.trackId;
+                                        const isSelecting =
+                                          selectingTrackId === candidate.trackId;
+                                        const hasSelectionData = Boolean(
+                                          getCandidateSelection(candidate)
+                                        );
+                                        const highStability =
+                                          candidate.stability !== null &&
+                                          candidate.stability !== undefined &&
+                                          candidate.stability > 0.85;
+                                        const lowCoverage =
+                                          candidate.coverage !== null &&
+                                          candidate.coverage !== undefined &&
+                                          candidate.coverage < 0.07;
+                                        return (
+                                          <button
+                                            key={candidate.trackId}
+                                            type="button"
+                                            onClick={() => handleReviewCandidate(candidate)}
+                                            disabled={
+                                              isSelecting || isSelected || !hasSelectionData
+                                            }
+                                            aria-pressed={isSelected}
+                                            className={`overflow-hidden rounded-xl border text-left transition ${
+                                              isSelected
+                                                ? "border-emerald-400/60 bg-emerald-500/10"
+                                                : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                            } ${
+                                              isSelecting || isSelected || !hasSelectionData
+                                                ? "cursor-not-allowed"
+                                                : ""
+                                            }`}
+                                          >
+                                            <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                              {thumbnailSrc ? (
+                                                <img
+                                                  src={thumbnailSrc}
+                                                  alt={`Candidate ${candidate.trackId}`}
+                                                  className="h-full w-full object-cover"
+                                                  onError={() =>
+                                                    handleCandidateFrameFallback(
+                                                      `candidate-${candidate.trackId}`,
+                                                      candidate.thumbnailUrl
+                                                    )
+                                                  }
+                                                />
+                                              ) : (
+                                                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                                  No thumbnail
+                                                </div>
+                                              )}
+                                            </div>
+                                            <div className="space-y-3 p-3 text-sm text-slate-200">
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                                  Track {candidate.trackId}
+                                                </span>
+                                                {isSelected ? (
+                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                    Selected
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                              {(highStability || lowCoverage) && (
+                                                <div className="flex flex-wrap gap-2">
+                                                  {highStability ? (
+                                                    <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                      High stability
+                                                    </span>
+                                                  ) : null}
+                                                  {lowCoverage ? (
+                                                    <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                      Low coverage
+                                                    </span>
+                                                  ) : null}
+                                                </div>
+                                              )}
+                                              <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Coverage pct
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatPercent(candidate.coverage)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Stability score
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatScore(candidate.stability)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Avg area
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatMetric(candidate.avgBoxArea)}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                                {isSelecting
+                                                  ? "Selecting..."
+                                                  : isSelected
+                                                    ? "Selected"
+                                                    : hasSelectionData
+                                                      ? "Review selection"
+                                                      : "Missing selection data"}
+                                              </div>
+                                            </div>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {showAllCandidates && otherCandidates.length > 0 ? (
+                                  <div className="space-y-3">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                      Others
+                                    </p>
+                                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                      {otherCandidates.map((candidate) => {
+                                        const thumbnailSrc =
+                                          getCandidateThumbnailSrc(candidate);
+                                        const isSelected =
+                                          selectedTrackId === candidate.trackId;
+                                        const isSelecting =
+                                          selectingTrackId === candidate.trackId;
+                                        const hasSelectionData = Boolean(
+                                          getCandidateSelection(candidate)
+                                        );
+                                        const highStability =
+                                          candidate.stability !== null &&
+                                          candidate.stability !== undefined &&
+                                          candidate.stability > 0.85;
+                                        const lowCoverage =
+                                          candidate.coverage !== null &&
+                                          candidate.coverage !== undefined &&
+                                          candidate.coverage < 0.07;
+                                        return (
+                                          <button
+                                            key={candidate.trackId}
+                                            type="button"
+                                            onClick={() => handleReviewCandidate(candidate)}
+                                            disabled={
+                                              isSelecting || isSelected || !hasSelectionData
+                                            }
+                                            aria-pressed={isSelected}
+                                            className={`overflow-hidden rounded-xl border text-left transition ${
+                                              isSelected
+                                                ? "border-emerald-400/60 bg-emerald-500/10"
+                                                : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                            } ${
+                                              isSelecting || isSelected || !hasSelectionData
+                                                ? "cursor-not-allowed"
+                                                : ""
+                                            }`}
+                                          >
+                                            <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                              {thumbnailSrc ? (
+                                                <img
+                                                  src={thumbnailSrc}
+                                                  alt={`Candidate ${candidate.trackId}`}
+                                                  className="h-full w-full object-cover"
+                                                  onError={() =>
+                                                    handleCandidateFrameFallback(
+                                                      `candidate-${candidate.trackId}`,
+                                                      candidate.thumbnailUrl
+                                                    )
+                                                  }
+                                                />
+                                              ) : (
+                                                <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                                  No thumbnail
+                                                </div>
+                                              )}
+                                            </div>
+                                            <div className="space-y-3 p-3 text-sm text-slate-200">
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                                  Track {candidate.trackId}
+                                                </span>
+                                                {isSelected ? (
+                                                  <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                    Selected
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                              {(highStability || lowCoverage) && (
+                                                <div className="flex flex-wrap gap-2">
+                                                  {highStability ? (
+                                                    <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                      High stability
+                                                    </span>
+                                                  ) : null}
+                                                  {lowCoverage ? (
+                                                    <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                      Low coverage
+                                                    </span>
+                                                  ) : null}
+                                                </div>
+                                              )}
+                                              <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Coverage pct
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatPercent(candidate.coverage)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Stability score
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatScore(candidate.stability)}
+                                                  </p>
+                                                </div>
+                                                <div>
+                                                  <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                    Avg area
+                                                  </p>
+                                                  <p className="mt-1 text-sm text-slate-200">
+                                                    {formatMetric(candidate.avgBoxArea)}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                                {isSelecting
+                                                  ? "Selecting..."
+                                                  : isSelected
+                                                    ? "Selected"
+                                                    : hasSelectionData
+                                                      ? "Review selection"
+                                                      : "Missing selection data"}
+                                              </div>
+                                            </div>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </>
+                            ) : null}
+
+                            {fallbackCandidates.length > 0 ? (
+                              <div className="space-y-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                  Best matches (top)
+                                </p>
+                                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                  {fallbackCandidates.map((candidate) => {
+                                    const thumbnailSrc =
+                                      getCandidateThumbnailSrc(candidate);
+                                    const isSelected =
+                                      selectedTrackId === candidate.trackId;
+                                    const isSelecting =
+                                      selectingTrackId === candidate.trackId;
+                                    const hasSelectionData = Boolean(
+                                      getCandidateSelection(candidate)
+                                    );
+                                    const highStability =
+                                      candidate.stability !== null &&
+                                      candidate.stability !== undefined &&
+                                      candidate.stability > 0.85;
+                                    const lowCoverage =
+                                      candidate.coverage !== null &&
+                                      candidate.coverage !== undefined &&
+                                      candidate.coverage < 0.07;
+                                    return (
+                                      <button
+                                        key={candidate.trackId}
+                                        type="button"
+                                        onClick={() => handleReviewCandidate(candidate)}
+                                        disabled={
+                                          isSelecting || isSelected || !hasSelectionData
+                                        }
+                                        aria-pressed={isSelected}
+                                        className={`overflow-hidden rounded-xl border text-left transition ${
+                                          isSelected
+                                            ? "border-emerald-400/60 bg-emerald-500/10"
+                                            : "border-slate-800 bg-slate-950 hover:border-emerald-400/60"
+                                        } ${
+                                          isSelecting || isSelected || !hasSelectionData
+                                            ? "cursor-not-allowed"
+                                            : ""
+                                        }`}
+                                      >
+                                        <div className="h-32 w-full overflow-hidden bg-slate-900">
+                                          {thumbnailSrc ? (
+                                            <img
+                                              src={thumbnailSrc}
+                                              alt={`Candidate ${candidate.trackId}`}
+                                              className="h-full w-full object-cover"
+                                              onError={() =>
+                                                handleCandidateFrameFallback(
+                                                  `candidate-${candidate.trackId}`,
+                                                  candidate.thumbnailUrl
+                                                )
+                                              }
+                                            />
+                                          ) : (
+                                            <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                                              No thumbnail
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="space-y-3 p-3 text-sm text-slate-200">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                              Track {candidate.trackId}
+                                            </span>
+                                            {isSelected ? (
+                                              <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                Selected
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          {(highStability || lowCoverage) && (
+                                            <div className="flex flex-wrap gap-2">
+                                              {highStability ? (
+                                                <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+                                                  High stability
+                                                </span>
+                                              ) : null}
+                                              {lowCoverage ? (
+                                                <span className="rounded-full bg-amber-400/20 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                                                  Low coverage
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                          )}
+                                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                                            <div>
+                                              <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                Coverage pct
+                                              </p>
+                                              <p className="mt-1 text-sm text-slate-200">
+                                                {formatPercent(candidate.coverage)}
+                                              </p>
+                                            </div>
+                                            <div>
+                                              <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                Stability score
+                                              </p>
+                                              <p className="mt-1 text-sm text-slate-200">
+                                                {formatScore(candidate.stability)}
+                                              </p>
+                                            </div>
+                                            <div>
+                                              <p className="uppercase tracking-[0.2em] text-slate-500">
+                                                Avg area
+                                              </p>
+                                              <p className="mt-1 text-sm text-slate-200">
+                                                {formatMetric(candidate.avgBoxArea)}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                            {isSelecting
+                                              ? "Selecting..."
+                                              : isSelected
+                                                ? "Selected"
+                                                : hasSelectionData
+                                                  ? "Review selection"
+                                                  : "Missing selection data"}
+                                          </div>
+                                        </div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
+                            {candidateReview ? (
+                              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                                      Review selection
+                                    </p>
+                                    <p className="mt-1 text-sm text-slate-200">
+                                      Track {candidateReview.trackId}: verifica i
+                                      sample frame prima di confermare.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCandidateReview(null)}
+                                    className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                                {reviewPreviewFrames.length > 0 ? (
+                                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                                    {reviewPreviewFrames.map((frame, index) => {
+                                      const frameSrc = getCandidateSampleFrameSrc(
+                                        frame.imageUrl ?? null
+                                      );
+                                      const bbox = resolveCandidateBox(
+                                        frame ?? null,
+                                        candidateReview
+                                      );
+                                      return (
+                                        <div
+                                          key={`${candidateReview.trackId}-${index}`}
+                                          className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-900"
+                                        >
+                                          {frameSrc ? (
+                                            <img
+                                              src={frameSrc}
+                                              alt={`Sample frame ${index + 1}`}
+                                              className="h-28 w-full object-cover"
+                                              onError={() =>
+                                                handleCandidateFrameFallback(
+                                                  "candidate-sample",
+                                                  frame.imageUrl
+                                                )
+                                              }
+                                            />
+                                          ) : (
+                                            <div className="flex h-28 items-center justify-center text-xs text-slate-500">
+                                              No frame
+                                            </div>
+                                          )}
+                                          {bbox ? (
+                                            <div
+                                              className="absolute rounded border border-emerald-400 bg-emerald-400/20"
+                                              style={{
+                                                left: `${bbox.x * 100}%`,
+                                                top: `${bbox.y * 100}%`,
+                                                width: `${bbox.w * 100}%`,
+                                                height: `${bbox.h * 100}%`
+                                              }}
+                                            />
+                                          ) : null}
+                                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/40 to-transparent px-2 py-1">
+                                            <p className="text-[0.6rem] uppercase tracking-[0.2em] text-slate-200">
+                                              t={formatFrameTime(
+                                                frame.frameTimeSec ?? null
+                                              )}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <p className="mt-3 text-xs text-slate-500">
+                                    Sample frames non disponibili per questa traccia.
+                                  </p>
+                                )}
+                                <div className="mt-4 flex flex-wrap items-center gap-3">
+                                  <PrimaryButton
+                                    onClick={() => handleSelectTrack(candidateReview)}
+                                    disabled={selectingTrackId === candidateReview.trackId}
+                                    className="bg-emerald-500 text-slate-950 hover:bg-emerald-400"
+                                  >
+                                    {selectingTrackId === candidateReview.trackId
+                                      ? "Selecting..."
+                                      : "Track this player"}
+                                  </PrimaryButton>
+                                  <span className="text-xs text-slate-500">
+                                    Conferma dopo aver controllato i bounding box.
+                                  </span>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : isDetectingPlayers ? null : showManualPlayerFallback ? (
+                          <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                            {manualFallbackMessage}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                            Manual selection available. Pick a frame above to draw a box.
+                          </div>
+                        )}
+                      </>
+                    ) : null}
+                    {showLegacyFlow ? null : isDetectingPlayers ? null : showManualPlayerFallback ? (
+                      <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                        {manualFallbackMessage}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                        Manual selection available. Pick a frame above to draw a box.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-slate-400">
+                    Player selected. Continue with target selection.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3 text-sm text-slate-400">
+                <p>Create a job to load preview frames.</p>
+              </div>
+            )}
+
+            {hasPreviewFrameErrors ? (
+              <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                <p>
+                  Images blocked or failed to load. Check the frame proxy or mixed
+                  content settings.
+                </p>
+                {imageLoadFailures.length > 0 ? (
+                  <div className="mt-2 space-y-1 text-[11px] text-amber-100">
+                    {imageLoadFailures.map((failure, index) => (
+                      <div key={`${failure.context}-${failure.url}-${index}`}>
+                        <span className="font-semibold">
+                          {failure.status !== null ? `HTTP ${failure.status}` : "HTTP ?"}
+                        </span>
+                        {` · ${failure.context}`}
+                        <div className="break-all text-amber-200/90">
+                          {failure.url}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </div>
             ) : null}
-            {selectionWarning ? (
-              <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
-                {selectionWarning}
-              </div>
-            ) : null}
-            {selectionSuccess ? (
-              <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                {selectionSuccess}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
 
-        {resultMissing ? (
-          <div className="mt-6 rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-            Processing completato ma result mancante (backend).
-          </div>
-        ) : null}
-        {shouldShowResult && job?.result ? <ResultView job={job} /> : null}
-      </section>
+            {jobId ? (
+              showFrameGridForPlayer ? (
+                <FrameSelector key={frameSelectorKey}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm text-slate-400">
+                      Manual fallback: click a frame to draw a bounding box around
+                      the player.
+                    </p>
+                    {previewPollingActive &&
+                    frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
+                      <span className="text-xs text-slate-500">
+                        {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
+                      </span>
+                    ) : null}
+                  </div>
+                  {previewFramesMissingUrls ? (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                      aggiungere signed_url/image_url.
+                    </div>
+                  ) : (
+                    <FrameGrid
+                      frames={frameSelectorFrames}
+                      getFrameSrc={getPreviewFrameSrc}
+                      onSelectFrame={(frame) => handleOpenPreview(frame, gridMode)}
+                      formatFrameTime={formatFrameTime}
+                      formatFrameAlt={formatFrameAlt}
+                      imageErrors={previewImageErrors}
+                      onImageError={(frame) =>
+                        handlePreviewFrameFallback(frame, "player-grid")
+                      }
+                      onImageLoad={handlePreviewImageLoad}
+                      accent="player"
+                    />
+                  )}
+                  <p className="text-xs text-slate-500">
+                    You will be asked to draw one bounding box in the full-size view.
+                  </p>
+                </FrameSelector>
+              ) : (
+                <div className="space-y-3 text-sm text-slate-400">
+                  {playerRef ? (
+                    <p>Player reference already saved.</p>
+                  ) : isCandidatesFailed && !hasAnyPreviewFrames ? (
+                    <>
+                      <p className="text-sm text-rose-200">
+                        Preview frames not available.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleRetryPreviewExtraction}
+                        className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200"
+                      >
+                        Retry preview extraction
+                      </button>
+                    </>
+                  ) : previewFramesMissingUrls ? (
+                    <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                      aggiungere signed_url/image_url.
+                    </div>
+                  ) : hasAnyPreviewFrames ? (
+                    <p className="text-sm text-slate-400">
+                      Preview frames ready. Select target to continue.
+                    </p>
+                  ) : isProcessingStatus ? (
+                    <div className="space-y-2 text-sm text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                        <span>Preparing frames...</span>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        {`${framesProcessedCount} frames processed`}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+                        <span>Preparing frames...</span>
+                      </div>
+                      {previewPollingError ? (
+                        <p className="text-xs text-rose-200">{previewPollingError}</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={
+                          previewPollingError
+                            ? handleRetryPreviewPolling
+                            : handleRefreshJob
+                        }
+                        disabled={previewPollingError ? false : refreshingFrames}
+                        className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 transition hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {previewPollingError
+                          ? "Retry polling"
+                          : refreshingFrames
+                          ? "Refreshing..."
+                          : "Retry"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )
+            ) : null}
+          </StepCard>
+        </div>
+
+        <div ref={targetSectionRef}>
+          <StepCard
+            title="Target"
+            description="Confirm the target box before analysis starts."
+            badge={<StatusPill className="border border-amber-400/40 bg-amber-500/10 text-amber-200">Step 3</StatusPill>}
+            isActive={wizardStep === 3}
+            summary={
+              targetConfirmed ? (
+                <span>Target confirmed. Ready for analysis.</span>
+              ) : (
+                <span>Confirm the target selection to proceed.</span>
+              )
+            }
+          >
+          {jobId ? (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Target</h3>
+                  <p className="text-sm text-slate-400">
+                    {targetSaved ? "Target saved" : "Missing target"}
+                  </p>
+                </div>
+                {gridMode === "target" ? (
+                  <StatusPill className="border border-amber-300/40 bg-amber-300/10 text-amber-200">
+                    Target mode on
+                  </StatusPill>
+                ) : null}
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={handleSelectTargetFromFrames}
+                  disabled={!hasAnyPreviewFrames}
+                  className="rounded-lg border border-amber-300/40 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:border-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Select target from frames
+                </button>
+                {playerRefTimeSec != null ? (
+                  <button
+                    type="button"
+                    onClick={handleUsePlayerFrameForTarget}
+                    disabled={!hasAnyPreviewFrames}
+                    className="rounded-lg border border-emerald-400/40 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Use same frame as player
+                  </button>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-3">
+                  <PrimaryButton
+                    onClick={handleSaveSelection}
+                    disabled={targetSelectionsEmpty}
+                    className="bg-amber-400 text-slate-950 hover:bg-amber-300"
+                  >
+                    {savingSelection ? "Confirming..." : "Confirm target"}
+                  </PrimaryButton>
+                  <span className="text-xs text-slate-500">
+                    {targetMissingTime
+                      ? "Frame missing time_sec."
+                      : targetInvalidReason
+                      ? targetInvalidReason
+                      : draftTargetSelection
+                      ? "Ready to confirm selection."
+                      : "Select one box to continue."}
+                  </span>
+                </div>
+              </div>
+
+              {showFrameGridForTarget ? (
+                <FrameSelector key={`${frameSelectorKey}-target`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm text-slate-400">
+                      Click a preview frame to draw a bounding box around the target.
+                    </p>
+                    {previewPollingActive &&
+                    frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
+                      <span className="text-xs text-slate-500">
+                        {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
+                      </span>
+                    ) : null}
+                  </div>
+                  {previewFramesMissingUrls ? (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                      aggiungere signed_url/image_url.
+                    </div>
+                  ) : (
+                    <FrameGrid
+                      frames={frameSelectorFrames}
+                      getFrameSrc={getPreviewFrameSrc}
+                      onSelectFrame={(frame) => handleOpenPreview(frame, "target")}
+                      formatFrameTime={formatFrameTime}
+                      formatFrameAlt={formatFrameAlt}
+                      imageErrors={previewImageErrors}
+                      onImageError={(frame) =>
+                        handlePreviewFrameFallback(frame, "target-grid")
+                      }
+                      onImageLoad={handlePreviewImageLoad}
+                      accent="target"
+                    />
+                  )}
+                  <p className="text-xs text-slate-500">
+                    You will be asked to draw one bounding box in the full-size view.
+                  </p>
+                </FrameSelector>
+              ) : null}
+
+              {selectionError ? (
+                <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                  {selectionError}
+                  {selectionRequestId ? (
+                    <div className="mt-2 text-[11px] text-rose-100/80">
+                      request_id: {selectionRequestId}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {selectionWarning ? (
+                <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+                  {selectionWarning}
+                </div>
+              ) : null}
+              {selectionSuccess ? (
+                <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                  {selectionSuccess}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">
+              Create a job to start target selection.
+            </p>
+          )}
+          </StepCard>
+        </div>
+
+        <div ref={analysisSectionRef}>
+          <StepCard
+            title="Analysis"
+            description="Monitor the selected player analysis and results."
+            badge={<StatusPill className="border border-blue-500/40 bg-blue-500/10 text-blue-200">Step 4</StatusPill>}
+            isActive={wizardStep === 4}
+            summary={
+              shouldShowResult ? (
+                <span>Analysis completed. Review the results.</span>
+              ) : (
+                <span>Waiting for analysis to start.</span>
+              )
+            }
+          >
+            {!analysisTrackId ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+                Click a bounding box in the overlay frames to start analyzing a
+                player.
+              </div>
+            ) : null}
+
+            {analysisTrackId ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                      Status
+                    </p>
+                    <p className="mt-1 text-sm text-slate-200">
+                      {analysisRequesting
+                        ? "Starting analysis..."
+                        : analysisStatus ?? "Waiting"}
+                    </p>
+                  </div>
+                  {analysisFrameKey ? (
+                    <StatusPill className="border border-slate-700 text-slate-300">
+                      Frame {analysisFrameKey}
+                    </StatusPill>
+                  ) : null}
+                </div>
+
+                {analysisIsRunning ? (
+                  <div className="mt-4 space-y-3">
+                    <ProgressBar pct={analysisProgressPct} />
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200">
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        Step
+                      </p>
+                      <p className="mt-2">{analysisStep}</p>
+                      {analysisMessage ? (
+                        <p className="mt-2 text-xs text-slate-500">
+                          {analysisMessage}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {analysisError ? (
+              <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                <p>{analysisError}</p>
+                <button
+                  type="button"
+                  onClick={handleRetryAnalysisPolling}
+                  className="mt-3 rounded-lg border border-rose-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-100 hover:border-rose-300"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            {analysisIsFinal && analysisJob?.result ? <ResultView job={analysisJob} /> : null}
+            {analysisIsFinal && analysisJob && !analysisJob.result ? (
+              <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+                Analysis completed but no result payload was returned.
+              </div>
+            ) : null}
+
+            {resultMissing ? (
+              <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                Processing completato ma result mancante (backend).
+              </div>
+            ) : null}
+            {shouldShowResult && job?.result ? <ResultView job={job} /> : null}
+          </StepCard>
+        </div>
+      </WizardShell>
 
       {selectedPreviewFrame ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
@@ -4553,23 +4496,21 @@ export default function JobRunner() {
                   : "Drag on the image to draw the player box."}
               </span>
               {previewMode === "player-ref" ? (
-                <button
-                  type="button"
+                <PrimaryButton
                   onClick={handleSavePlayerRef}
                   disabled={!playerRefSelection || savingPlayerRef || playerRefMissingTime}
-                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="bg-emerald-500 text-slate-950 hover:bg-emerald-400"
                 >
                   {savingPlayerRef ? "Saving..." : "Save selection"}
-                </button>
+                </PrimaryButton>
               ) : (
-                <button
-                  type="button"
+                <PrimaryButton
                   onClick={() => submitTargetSelection(false, true)}
                   disabled={targetSelectionsEmpty}
-                  className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="bg-amber-400 text-slate-950 hover:bg-amber-300"
                 >
                   {savingSelection ? "Confirming..." : "Confirm target"}
-                </button>
+                </PrimaryButton>
               )}
             </div>
 
@@ -4589,9 +4530,7 @@ export default function JobRunner() {
             aria-modal="true"
             className="w-full max-w-md rounded-2xl border border-rose-400/40 bg-slate-900 p-6 shadow-xl"
           >
-            <h4 className="text-lg font-semibold text-white">
-              Target mismatch
-            </h4>
+            <h4 className="text-lg font-semibold text-white">Target mismatch</h4>
             <p className="mt-2 text-sm text-slate-200">
               Il box non coincide con il giocatore selezionato.
             </p>
