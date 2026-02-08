@@ -113,6 +113,8 @@ export type JobResult = {
 
 export type JobResponse = {
   jobId?: string;
+  id?: string;
+  job_id?: string;
   status?: JobStatus;
   progress?: JobProgress;
   autodetection_status?: string;
@@ -135,6 +137,9 @@ export type JobResponse = {
   videoUrl?: string;
   teamName?: string;
 };
+
+export const resolveJobId = (job?: JobResponse | null) =>
+  job?.id ?? job?.job_id ?? job?.jobId ?? null;
 
 export type JobFrame = {
   t: number;

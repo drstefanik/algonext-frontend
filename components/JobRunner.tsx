@@ -16,6 +16,7 @@ import {
   getJobFrames,
   getJobTrackCandidates,
   normalizeJob,
+  resolveJobId,
   pickJobPlayer,
   saveJobPlayerRef,
   saveJobTargetSelection,
@@ -53,6 +54,7 @@ const POLLING_TIMEOUT_MS = 12000;
 const TARGET_FRAMES_COUNT = 32;
 const MIN_FRAME_COUNT = 8;
 const TARGET_SECONDARY_FALLBACK_LIMIT = 5;
+const CURRENT_JOB_ID_STORAGE_KEY = "algonext.currentJobId";
 
 type ImageLoadFailure = {
   url: string;
@@ -502,7 +504,7 @@ export default function JobRunner() {
   const [category, setCategory] = useState("U17");
   const [shirtNumber, setShirtNumber] = useState("");
   const [teamName, setTeamName] = useState("");
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [storedJobId, setStoredJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
   const [targetSelection, setTargetSelection] = useState<TargetSelection | null>(
     null
@@ -600,6 +602,33 @@ export default function JobRunner() {
   const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
     frame.url || frame.signedUrl || "";
 
+  const jobId = resolveJobId(job) ?? storedJobId;
+
+  useEffect(() => {
+    if (storedJobId) {
+      return;
+    }
+    const savedJobId = window.localStorage.getItem(CURRENT_JOB_ID_STORAGE_KEY);
+    if (savedJobId) {
+      setStoredJobId(savedJobId);
+    }
+  }, [storedJobId]);
+
+  useEffect(() => {
+    const resolvedJobId = resolveJobId(job);
+    if (resolvedJobId && resolvedJobId !== storedJobId) {
+      setStoredJobId(resolvedJobId);
+    }
+  }, [job, storedJobId]);
+
+  useEffect(() => {
+    if (jobId) {
+      window.localStorage.setItem(CURRENT_JOB_ID_STORAGE_KEY, jobId);
+      return;
+    }
+    window.localStorage.removeItem(CURRENT_JOB_ID_STORAGE_KEY);
+  }, [jobId]);
+
   const pct = job?.progress?.pct ?? 0;
   const step = job?.progress?.step ?? "—";
   const normalizedStep =
@@ -689,7 +718,12 @@ export default function JobRunner() {
     normalizedStep === "COMPLETE" ||
     normalizedStep === "COMPLETED" ||
     normalizedStep === "FINISHED";
-  const shouldShowResult = Boolean(job) && (isFinalStatus || isFinalStep);
+  const hasResultPayload = Boolean(job?.result);
+  const isResultStatus =
+    normalizedStatus === "COMPLETED" || normalizedStatus === "PARTIAL";
+  const isResultStep = normalizedStep === "DONE";
+  const shouldShowResults = Boolean(job) && (hasResultPayload || isResultStatus || isResultStep);
+  const shouldShowResult = Boolean(job) && (shouldShowResults || isFinalStatus || isFinalStep);
   const resultMissing = shouldShowResult && !job?.result;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
@@ -770,7 +804,15 @@ export default function JobRunner() {
           (job.progress as Record<string, unknown>).processed_frames
       : null
   );
-  const framesProcessedCount = Math.max(framesProcessed ?? 0, 0);
+  const sampleFramesCount = coerceNumber(
+    job?.result?.evidence_metrics?.candidate_metrics?.sampleFramesCount
+  );
+  const sprintsCount = coerceNumber(job?.result?.evidence_metrics?.sprints_count);
+  const framesProcessedFallback = sampleFramesCount ?? sprintsCount ?? 0;
+  const framesProcessedCount = Math.max(
+    framesProcessed && framesProcessed > 0 ? framesProcessed : framesProcessedFallback,
+    0
+  );
   const totalTracks = coerceNumber(
     job?.progress && typeof job.progress === "object"
       ? (job.progress as Record<string, unknown>).totalTracks ??
@@ -807,6 +849,19 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = hasPlayerRef && targetConfirmed;
+  const preRunStatuses = new Set([
+    "WAITING_FOR_SELECTION",
+    "READY_FOR_ANALYSIS",
+    "READY_TO_ENQUEUE",
+    "WAITING",
+    "WAITING_FOR_TARGET",
+    "WAITING_FOR_PLAYER",
+    "WAITING_FOR_PLAYER_REF",
+    "WAITING_FOR_REFERENCE"
+  ]);
+  const isPreRunStatus = normalizedStatus ? preRunStatuses.has(normalizedStatus) : true;
+  const shouldShowStartAnalysis =
+    Boolean(jobId) && !shouldShowResults && targetConfirmed && playerSaved && isPreRunStatus;
   const enqueueHint = !canEnqueue
     ? "Seleziona player e target prima di avviare"
     : "Ready";
@@ -1758,7 +1813,7 @@ export default function JobRunner() {
           : {})
       });
       const nextJobId = response.jobId ?? null;
-      setJobId(nextJobId);
+      setStoredJobId(nextJobId);
       setJob({ jobId: response.jobId, status: response.status });
       setTargetSelection(null);
       setSelectionSuccess(null);
@@ -2589,7 +2644,7 @@ export default function JobRunner() {
     setCategory("U17");
     setShirtNumber("");
     setTeamName("");
-    setJobId(null);
+    setStoredJobId(null);
     setJob(null);
     setTargetSelection(null);
     setDraftTargetSelection(null);
@@ -2723,7 +2778,7 @@ export default function JobRunner() {
                     {effectiveStep === "TARGET" ? "Select target now" : playerCtaLabel}
                   </button>
                 ) : null}
-                {jobId && isReadyToEnqueue ? (
+                {shouldShowStartAnalysis ? (
                   <PrimaryButton
                     onClick={handleEnqueue}
                     disabled={submitting}
@@ -4254,7 +4309,7 @@ export default function JobRunner() {
               )
             }
           >
-            {!analysisTrackId ? (
+            {!analysisTrackId && !shouldShowResults ? (
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
                 Click a bounding box in the overlay frames to start analyzing a
                 player.
@@ -4300,7 +4355,7 @@ export default function JobRunner() {
               </div>
             ) : null}
 
-            {jobId && isReadyToEnqueue ? (
+            {shouldShowStartAnalysis ? (
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <PrimaryButton onClick={handleEnqueue} disabled={submitting}>
                   {submitting ? "Starting..." : "Start analysis"}
