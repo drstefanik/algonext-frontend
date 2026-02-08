@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import type { JobResponse } from "@/lib/api";
+import { resolveJobId, type JobResponse } from "@/lib/api";
 import { extractWarnings } from "@/lib/warnings";
 
 const formatScore = (value?: number) => {
@@ -153,7 +153,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
     "idle" | "loading" | "not-ready" | "error"
   >("idle");
   const [aiReportError, setAiReportError] = useState<string | null>(null);
-  const jobId = job.jobId ?? null;
+  const jobId = resolveJobId(job);
 
   const handleFetchAiReport = async (force = false) => {
     if (!jobId) {
