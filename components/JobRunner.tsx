@@ -585,6 +585,7 @@ export default function JobRunner() {
   const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const playerSectionRef = useRef<HTMLDivElement | null>(null);
+  const targetSectionRef = useRef<HTMLDivElement | null>(null);
   const analysisSectionRef = useRef<HTMLDivElement | null>(null);
   const pollStartRef = useRef<number | null>(null);
   const analysisPollStartRef = useRef<number | null>(null);
@@ -649,12 +650,10 @@ export default function JobRunner() {
           return applyTargetCandidates(resolvedFrame);
         })
       : jobPreviewFrames.map((frame) => applyTargetCandidates(frame));
-  const targetGalleryFrames =
-    overlayGalleryFrames.length > 0 ? overlayGalleryFrames : resolvedPreviewFrames;
-  const previewFramesWithImages = resolvedPreviewFrames.filter((frame) =>
+  const previewFramesWithImages = previewFrames.filter((frame) =>
     Boolean(resolvePreviewFrameUrl(frame))
   );
-  const hasAnyPreviewFrames = resolvedPreviewFrames.length > 0;
+  const hasAnyPreviewFrames = previewFrames.length > 0;
   const hasPreviewImages = previewFramesWithImages.length > 0;
   const previewFramesMissingUrls = hasAnyPreviewFrames && !hasPreviewImages;
   const previewImageErrorCount = Object.keys(previewImageErrors).length;
@@ -880,8 +879,7 @@ export default function JobRunner() {
     autodetectLowCoverage && hasAutodetectErrorDetail
       ? errorDetail
       : "Autodetection coverage is low. Use the manual fallback below.";
-  const frameSelectorFrames =
-    gridMode === "target" ? targetGalleryFrames : previewFramesWithImages;
+  const frameSelectorFrames = previewFramesWithImages;
   const previewGridClassName =
     frameSelectorFrames.length > 8
       ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
@@ -891,6 +889,8 @@ export default function JobRunner() {
     (showManualPlayerFallback &&
       ((previewsReady && (hasPreviewImages || previewFramesMissingUrls)) ||
         (isCandidatesFailed && (hasPreviewImages || previewFramesMissingUrls))));
+  const showFrameGridForPlayer = canShowFrameSelector && gridMode === "player-ref";
+  const showFrameGridForTarget = canShowFrameSelector && gridMode === "target";
   const isDetectingPlayers =
     (autodetectEnabled || candidatePolling) &&
     !autodetectLowCoverage &&
@@ -2557,7 +2557,7 @@ export default function JobRunner() {
   const handleFocusStep = () => {
     if (effectiveStep === "TARGET") {
       setGridMode("target");
-      playerSectionRef.current?.scrollIntoView({
+      targetSectionRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "start"
       });
@@ -2626,37 +2626,8 @@ export default function JobRunner() {
   const handleSelectTargetFromFrames = () => {
     setSelectionError(null);
     setSelectionWarning(null);
-    const selectionSource =
-      draftTargetSelection ?? jobTargetDraft ?? targetSelection ?? null;
-    if (selectionSource) {
-      const { frame: resolvedTargetFrame, warning } =
-        resolveTargetPreviewFrame(selectionSource);
-      if (warning && resolvedTargetFrame) {
-        setSelectionWarning(warning);
-      }
-      if (resolvedTargetFrame) {
-        handleOpenPreview(resolvedTargetFrame, "target", selectionSource);
-      } else {
-        setSelectionError(warning ?? "Impossibile risolvere il frame del target.");
-      }
-    } else {
-      const fallbackFrame =
-        previewFramesWithImages.find(
-          (frame) => getTargetCandidatesForFrame(frame).length > 0
-        ) ?? previewFramesWithImages[0] ?? null;
-      if (!fallbackFrame) {
-        setSelectionError(
-          "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
-        );
-        return;
-      }
-      handleOpenPreview(fallbackFrame, "target");
-      setSelectionWarning(
-        "Target draft mancante. Seleziona un box candidato (PRIMARY) oppure disegna manualmente."
-      );
-    }
     setGridMode("target");
-    playerSectionRef.current?.scrollIntoView({
+    targetSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start"
     });
@@ -2679,7 +2650,7 @@ export default function JobRunner() {
     setSelectionWarning(null);
     setGridMode("target");
     handleOpenPreview(closestFrame, "target");
-    playerSectionRef.current?.scrollIntoView({
+    targetSectionRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "start"
     });
@@ -2701,7 +2672,7 @@ export default function JobRunner() {
       h: draftTargetSelection.h
     };
     if (isBboxOutOfBounds(bbox) || isBboxTooSmallOrLarge(bbox)) {
-      return "Select a player box.";
+      return "Select a target box.";
     }
     return null;
   }, [draftTargetSelection]);
@@ -3984,16 +3955,14 @@ export default function JobRunner() {
             ) : null}
 
             {jobId ? (
-              canShowFrameSelector ? (
+              showFrameGridForPlayer ? (
                 <FrameSelector key={frameSelectorKey}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <p className="text-sm text-slate-400">
-                      {gridMode === "player-ref"
-                        ? "Manual fallback: click a frame to draw a bounding box around the player."
-                        : "Click a preview frame to draw a bounding box around the target."}
+                      Manual fallback: click a frame to draw a bounding box around
+                      the player.
                     </p>
-                    {gridMode === "target" &&
-                    previewPollingActive &&
+                    {previewPollingActive &&
                     frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
                       <span className="text-xs text-slate-500">
                         {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
@@ -4017,7 +3986,7 @@ export default function JobRunner() {
                         handlePreviewFrameFallback(frame, "player-grid")
                       }
                       onImageLoad={handlePreviewImageLoad}
-                      accent={gridMode === "target" ? "target" : "player"}
+                      accent="player"
                     />
                   )}
                   <p className="text-xs text-slate-500">
@@ -4093,19 +4062,20 @@ export default function JobRunner() {
           </StepCard>
         </div>
 
-        <StepCard
-          title="Target"
-          description="Confirm the target box before analysis starts."
-          badge={<StatusPill className="border border-amber-400/40 bg-amber-500/10 text-amber-200">Step 3</StatusPill>}
-          isActive={wizardStep === 3}
-          summary={
-            targetConfirmed ? (
-              <span>Target confirmed. Ready for analysis.</span>
-            ) : (
-              <span>Confirm the target selection to proceed.</span>
-            )
-          }
-        >
+        <div ref={targetSectionRef}>
+          <StepCard
+            title="Target"
+            description="Confirm the target box before analysis starts."
+            badge={<StatusPill className="border border-amber-400/40 bg-amber-500/10 text-amber-200">Step 3</StatusPill>}
+            isActive={wizardStep === 3}
+            summary={
+              targetConfirmed ? (
+                <span>Target confirmed. Ready for analysis.</span>
+              ) : (
+                <span>Confirm the target selection to proceed.</span>
+              )
+            }
+          >
           {jobId ? (
             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -4161,6 +4131,45 @@ export default function JobRunner() {
                 </div>
               </div>
 
+              {showFrameGridForTarget ? (
+                <FrameSelector key={`${frameSelectorKey}-target`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm text-slate-400">
+                      Click a preview frame to draw a bounding box around the target.
+                    </p>
+                    {previewPollingActive &&
+                    frameSelectorFrames.length < TARGET_FRAMES_COUNT ? (
+                      <span className="text-xs text-slate-500">
+                        {`Loading frames (${frameSelectorFrames.length}/${TARGET_FRAMES_COUNT})…`}
+                      </span>
+                    ) : null}
+                  </div>
+                  {previewFramesMissingUrls ? (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+                      Preview frames ricevuti ma senza URL immagine. Verifica backend:
+                      aggiungere signed_url/image_url.
+                    </div>
+                  ) : (
+                    <FrameGrid
+                      frames={frameSelectorFrames}
+                      getFrameSrc={getPreviewFrameSrc}
+                      onSelectFrame={(frame) => handleOpenPreview(frame, "target")}
+                      formatFrameTime={formatFrameTime}
+                      formatFrameAlt={formatFrameAlt}
+                      imageErrors={previewImageErrors}
+                      onImageError={(frame) =>
+                        handlePreviewFrameFallback(frame, "target-grid")
+                      }
+                      onImageLoad={handlePreviewImageLoad}
+                      accent="target"
+                    />
+                  )}
+                  <p className="text-xs text-slate-500">
+                    You will be asked to draw one bounding box in the full-size view.
+                  </p>
+                </FrameSelector>
+              ) : null}
+
               {selectionError ? (
                 <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
                   {selectionError}
@@ -4187,7 +4196,8 @@ export default function JobRunner() {
               Create a job to start target selection.
             </p>
           )}
-        </StepCard>
+          </StepCard>
+        </div>
 
         <div ref={analysisSectionRef}>
           <StepCard
