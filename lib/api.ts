@@ -138,8 +138,10 @@ export type JobResponse = {
   teamName?: string;
 };
 
-export const resolveJobId = (job?: JobResponse | null) =>
-  job?.id ?? job?.job_id ?? job?.jobId ?? null;
+export const resolveJobId = (job?: JobResponse | null) => {
+  const normalizedJobId = job?.id ?? job?.job_id ?? null;
+  return normalizedJobId ?? job?.jobId ?? null;
+};
 
 export type JobFrame = {
   t: number;
