@@ -512,6 +512,7 @@ export default function JobRunner() {
   const [draftTargetSelection, setDraftTargetSelection] =
     useState<TargetSelection | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [enqueueError, setEnqueueError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [selectionSuccess, setSelectionSuccess] = useState<string | null>(null);
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null);
@@ -525,6 +526,7 @@ export default function JobRunner() {
   const [polling, setPolling] = useState(false);
   const [pollingTimedOut, setPollingTimedOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [enqueuing, setEnqueuing] = useState(false);
   const [savingSelection, setSavingSelection] = useState(false);
   const [savingPlayerRef, setSavingPlayerRef] = useState(false);
   const [gridMode, setGridMode] = useState<PreviewMode>("player-ref");
@@ -602,7 +604,7 @@ export default function JobRunner() {
   const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
     frame.url || frame.signedUrl || "";
 
-  const jobId = resolveJobId(job) ?? storedJobId;
+  const jobId = (job?.id ?? job?.job_id ?? null) ?? storedJobId;
 
   useEffect(() => {
     if (storedJobId) {
@@ -727,7 +729,18 @@ export default function JobRunner() {
   const resultMissing = shouldShowResult && !job?.result;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
-  const isReadyToEnqueue = normalizedStatus === "READY_TO_ENQUEUE";
+  const readyToEnqueueStatuses = new Set([
+    "READY_TO_ENQUEUE",
+    "READY_FOR_ANALYSIS",
+    "WAITING_FOR_ENQUEUE",
+    "WAITING_TO_ENQUEUE",
+    "WAITING_FOR_ANALYSIS"
+  ]);
+  const isReadyToEnqueueStep = normalizedStep === "READY_TO_ENQUEUE";
+  const isReadyToEnqueueStatus = normalizedStatus
+    ? readyToEnqueueStatuses.has(normalizedStatus)
+    : false;
+  const isReadyToEnqueue = isReadyToEnqueueStep || isReadyToEnqueueStatus;
   const isAnalyzingStatus =
     normalizedStatus === "ANALYZING" ||
     normalizedStatus === "RUNNING" ||
@@ -849,22 +862,13 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = hasPlayerRef && targetConfirmed;
-  const preRunStatuses = new Set([
-    "WAITING_FOR_SELECTION",
-    "READY_FOR_ANALYSIS",
-    "READY_TO_ENQUEUE",
-    "WAITING",
-    "WAITING_FOR_TARGET",
-    "WAITING_FOR_PLAYER",
-    "WAITING_FOR_PLAYER_REF",
-    "WAITING_FOR_REFERENCE"
-  ]);
-  const isPreRunStatus = normalizedStatus ? preRunStatuses.has(normalizedStatus) : true;
   const shouldShowStartAnalysis =
-    Boolean(jobId) && !shouldShowResults && targetConfirmed && playerSaved && isPreRunStatus;
+    Boolean(jobId) && !shouldShowResults && targetConfirmed && playerSaved && isReadyToEnqueue;
   const enqueueHint = !canEnqueue
     ? "Seleziona player e target prima di avviare"
-    : "Ready";
+    : isReadyToEnqueue
+      ? "Ready"
+      : "Waiting for backend";
   const wizardSteps = [
     { label: "Upload" },
     { label: "Player" },
@@ -1846,12 +1850,15 @@ export default function JobRunner() {
     if (!jobId) {
       return;
     }
-    if (!canEnqueue && !isReadyToEnqueue) {
-      setError("Seleziona player e target prima di avviare");
+    if (enqueuing) {
       return;
     }
-    setError(null);
-    setSubmitting(true);
+    if (!canEnqueue && !isReadyToEnqueue) {
+      setEnqueueError("Seleziona player e target prima di avviare");
+      return;
+    }
+    setEnqueueError(null);
+    setEnqueuing(true);
     try {
       const response = await enqueueJob(jobId);
       setJob(normalizeJob(response));
@@ -1861,9 +1868,9 @@ export default function JobRunner() {
       setFramesFrozen(true);
       setSelectedPreviewFrame(null);
     } catch (enqueueError) {
-      setError(toErrorMessage(enqueueError));
+      setEnqueueError(toErrorMessage(enqueueError));
     } finally {
-      setSubmitting(false);
+      setEnqueuing(false);
     }
   };
 
@@ -2781,12 +2788,17 @@ export default function JobRunner() {
                 {shouldShowStartAnalysis ? (
                   <PrimaryButton
                     onClick={handleEnqueue}
-                    disabled={submitting}
-                    aria-disabled={submitting}
-                    className={submitting ? "cursor-not-allowed opacity-60" : ""}
+                    disabled={enqueuing}
+                    aria-disabled={enqueuing}
+                    className={enqueuing ? "cursor-not-allowed opacity-60" : ""}
                   >
-                    {submitting ? "Starting..." : "Start analysis"}
+                    {enqueuing ? "Starting..." : "Start analysis"}
                   </PrimaryButton>
+                ) : null}
+                {shouldShowStartAnalysis && enqueueError ? (
+                  <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                    {enqueueError}
+                  </div>
                 ) : null}
                 {jobId && isAnalyzingStatus ? (
                   <button
@@ -3035,14 +3047,14 @@ export default function JobRunner() {
                 Job Created
               </p>
               <p className="mt-2 text-sm text-slate-200">ID: {jobId}</p>
-              {isReadyToEnqueue ? (
+              {shouldShowStartAnalysis ? (
                 <PrimaryButton
                   onClick={handleEnqueue}
-                  disabled={submitting}
-                  aria-disabled={submitting}
-                  className={submitting ? "cursor-not-allowed opacity-50" : ""}
+                  disabled={enqueuing}
+                  aria-disabled={enqueuing}
+                  className={enqueuing ? "cursor-not-allowed opacity-50" : ""}
                 >
-                  {submitting ? "Starting..." : "Start analysis"}
+                  {enqueuing ? "Starting..." : "Start analysis"}
                 </PrimaryButton>
               ) : null}
               <p className="mt-2 text-xs text-slate-500">
@@ -4357,9 +4369,14 @@ export default function JobRunner() {
 
             {shouldShowStartAnalysis ? (
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <PrimaryButton onClick={handleEnqueue} disabled={submitting}>
-                  {submitting ? "Starting..." : "Start analysis"}
+                <PrimaryButton onClick={handleEnqueue} disabled={enqueuing}>
+                  {enqueuing ? "Starting..." : "Start analysis"}
                 </PrimaryButton>
+                {enqueueError ? (
+                  <div className="w-full rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                    {enqueueError}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
