@@ -30,8 +30,20 @@ export type JobStatus =
 export type JobProgress = {
   pct?: number;
   step?: string;
+  phase?: string;
   message?: string;
   updatedAt?: string;
+  stats?: {
+    frames_total?: number;
+    framesTotal?: number;
+    frames_used?: number;
+    framesUsed?: number;
+    sampleFramesCount?: number;
+    detections_count?: number;
+    detectionsCount?: number;
+    tracklets_count?: number;
+    trackletsCount?: number;
+  };
   autodetection_status?: string;
   autodetectionStatus?: string;
   totalTracks?: number;
@@ -748,6 +760,39 @@ const mapJobResponse = (job: UnknownRecord): JobResponse => {
   };
 };
 
+const derivePhaseFromStep = (step: unknown): string | null => {
+  if (typeof step !== "string") {
+    return null;
+  }
+  const normalizedStep = step.trim().toUpperCase();
+  if (!normalizedStep) {
+    return null;
+  }
+  if (normalizedStep.includes("PREVIEW")) {
+    return "PREVIEW";
+  }
+  if (normalizedStep.includes("TRACK")) {
+    return "TRACKING";
+  }
+  if (normalizedStep.includes("FEATURE")) {
+    return "FEATURES";
+  }
+  if (normalizedStep.includes("SCOR")) {
+    return "SCORING";
+  }
+  if (normalizedStep.includes("CLIP")) {
+    return "CLIPS";
+  }
+  if (
+    normalizedStep === "DONE" ||
+    normalizedStep.includes("FINAL") ||
+    normalizedStep.includes("COMPLETE")
+  ) {
+    return "FINALIZE";
+  }
+  return null;
+};
+
 export const normalizeJob = (payload: unknown): JobResponse => {
   const normalized =
     payload && typeof payload === "object" && "data" in payload
@@ -755,6 +800,9 @@ export const normalizeJob = (payload: unknown): JobResponse => {
       : (payload as UnknownRecord);
   const data = normalized ?? {};
   const progressSource = data.progress as UnknownRecord | undefined;
+  const progressStatsSource =
+    (progressSource?.stats as UnknownRecord | undefined) ??
+    (progressSource?.progress_stats as UnknownRecord | undefined);
   const playerRef = data.player_ref ?? data.playerRef ?? null;
   const inputVideoUrl = data.assets?.inputVideoUrl ?? data.video_url ?? null;
   const previewFrames = data.preview_frames ?? data.previewFrames ?? [];
@@ -808,6 +856,29 @@ export const normalizeJob = (payload: unknown): JobResponse => {
     progress: progressSource
       ? {
           ...progressSource,
+          phase:
+            progressSource.phase ??
+            progressSource.progress_phase ??
+            derivePhaseFromStep(progressSource.step),
+          stats: {
+            ...(progressStatsSource ?? {}),
+            frames_total:
+              progressStatsSource?.frames_total ?? progressSource.frames_total ?? null,
+            frames_used:
+              progressStatsSource?.frames_used ?? progressSource.frames_used ?? null,
+            sampleFramesCount:
+              progressStatsSource?.sampleFramesCount ??
+              progressStatsSource?.sample_frames_count ??
+              progressSource.sampleFramesCount ??
+              progressSource.sample_frames_count ??
+              null,
+            detections_count:
+              progressStatsSource?.detections_count ??
+              progressSource.detections_count ??
+              null,
+            tracklets_count:
+              progressStatsSource?.tracklets_count ?? progressSource.tracklets_count ?? null
+          },
           updatedAt: progressSource.updatedAt ?? progressSource.updated_at ?? null
         }
       : data.progress
