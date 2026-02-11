@@ -604,7 +604,8 @@ export default function JobRunner() {
   const resolvePreviewFrameUrl = (frame: PreviewFrame) =>
     frame.url || frame.signedUrl || "";
 
-  const jobId = (job?.id ?? job?.job_id ?? null) ?? storedJobId;
+  const normalizedJobId = job?.id ?? job?.job_id ?? null;
+  const jobId = normalizedJobId ?? storedJobId;
 
   useEffect(() => {
     if (storedJobId) {
@@ -729,18 +730,10 @@ export default function JobRunner() {
   const resultMissing = shouldShowResult && !job?.result;
   const isProcessingStatus = normalizedStatus === "PROCESSING";
   const isLowCoverageStatus = normalizedStatus === "LOW_COVERAGE";
-  const readyToEnqueueStatuses = new Set([
-    "READY_TO_ENQUEUE",
-    "READY_FOR_ANALYSIS",
-    "WAITING_FOR_ENQUEUE",
-    "WAITING_TO_ENQUEUE",
-    "WAITING_FOR_ANALYSIS"
-  ]);
-  const isReadyToEnqueueStep = normalizedStep === "READY_TO_ENQUEUE";
-  const isReadyToEnqueueStatus = normalizedStatus
-    ? readyToEnqueueStatuses.has(normalizedStatus)
+  const readyToEnqueueSteps = new Set(["READY_TO_ENQUEUE", "READY_FOR_ENQUEUE"]);
+  const isReadyToEnqueueStep = normalizedStep
+    ? readyToEnqueueSteps.has(normalizedStep)
     : false;
-  const isReadyToEnqueue = isReadyToEnqueueStep || isReadyToEnqueueStatus;
   const isAnalyzingStatus =
     normalizedStatus === "ANALYZING" ||
     normalizedStatus === "RUNNING" ||
@@ -862,11 +855,19 @@ export default function JobRunner() {
   const isExtractingPreviews = job?.progress?.step === "EXTRACTING_PREVIEWS";
   const isPreviewsReady = job?.progress?.step === "PREVIEWS_READY";
   const canEnqueue = hasPlayerRef && targetConfirmed;
+  const hasCompletedResult =
+    (normalizedStatus === "COMPLETED" || normalizedStatus === "PARTIAL") &&
+    hasResultPayload;
+  const shouldHideStartAnalysis = normalizedStep === "DONE" || hasCompletedResult;
   const shouldShowStartAnalysis =
-    Boolean(jobId) && !shouldShowResults && targetConfirmed && playerSaved && isReadyToEnqueue;
+    Boolean(jobId) &&
+    !shouldHideStartAnalysis &&
+    targetConfirmed &&
+    playerSaved &&
+    isReadyToEnqueueStep;
   const enqueueHint = !canEnqueue
     ? "Seleziona player e target prima di avviare"
-    : isReadyToEnqueue
+    : isReadyToEnqueueStep
       ? "Ready"
       : "Waiting for backend";
   const wizardSteps = [
@@ -1853,7 +1854,7 @@ export default function JobRunner() {
     if (enqueuing) {
       return;
     }
-    if (!canEnqueue && !isReadyToEnqueue) {
+    if (!canEnqueue || !isReadyToEnqueueStep) {
       setEnqueueError("Seleziona player e target prima di avviare");
       return;
     }
@@ -1868,7 +1869,12 @@ export default function JobRunner() {
       setFramesFrozen(true);
       setSelectedPreviewFrame(null);
     } catch (enqueueError) {
-      setEnqueueError(toErrorMessage(enqueueError));
+      const status =
+        enqueueError && typeof enqueueError === "object" && "status" in enqueueError
+          ? (enqueueError as { status?: number }).status
+          : null;
+      const message = toErrorMessage(enqueueError);
+      setEnqueueError(status ? `Error ${status}: ${message}` : message);
     } finally {
       setEnqueuing(false);
     }
@@ -2792,7 +2798,7 @@ export default function JobRunner() {
                     aria-disabled={enqueuing}
                     className={enqueuing ? "cursor-not-allowed opacity-60" : ""}
                   >
-                    {enqueuing ? "Starting..." : "Start analysis"}
+                    {enqueuing ? "Starting…" : "Start analysis"}
                   </PrimaryButton>
                 ) : null}
                 {shouldShowStartAnalysis && enqueueError ? (
@@ -3058,7 +3064,7 @@ export default function JobRunner() {
                 </PrimaryButton>
               ) : null}
               <p className="mt-2 text-xs text-slate-500">
-                {isReadyToEnqueue ? "Ready" : enqueueHint}
+                {isReadyToEnqueueStep ? "Ready" : enqueueHint}
               </p>
             </div>
           ) : null}
@@ -4370,7 +4376,7 @@ export default function JobRunner() {
             {shouldShowStartAnalysis ? (
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <PrimaryButton onClick={handleEnqueue} disabled={enqueuing}>
-                  {enqueuing ? "Starting..." : "Start analysis"}
+                  {enqueuing ? "Starting…" : "Start analysis"}
                 </PrimaryButton>
                 {enqueueError ? (
                   <div className="w-full rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
