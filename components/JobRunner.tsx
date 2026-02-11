@@ -99,6 +99,66 @@ const formatProgressPercent = (value: number | null | undefined) => {
   return `${Math.round(normalized)}%`;
 };
 
+
+const getProgressPhase = (job?: JobResponse | null) => {
+  const progress = job?.progress;
+  if (!progress || typeof progress !== "object") {
+    return null;
+  }
+  const rawPhase =
+    (progress as Record<string, unknown>).phase ??
+    (progress as Record<string, unknown>).progress_phase;
+  if (typeof rawPhase === "string" && rawPhase.trim()) {
+    return rawPhase.trim().toUpperCase();
+  }
+  const rawStep = (progress as Record<string, unknown>).step;
+  if (typeof rawStep !== "string") {
+    return null;
+  }
+  const normalizedStep = rawStep.trim().toUpperCase();
+  if (!normalizedStep) {
+    return null;
+  }
+  if (normalizedStep.includes("PREVIEW")) {
+    return "PREVIEW";
+  }
+  if (normalizedStep.includes("TRACK")) {
+    return "TRACKING";
+  }
+  if (normalizedStep.includes("FEATURE")) {
+    return "FEATURES";
+  }
+  if (normalizedStep.includes("SCOR")) {
+    return "SCORING";
+  }
+  if (normalizedStep.includes("CLIP")) {
+    return "CLIPS";
+  }
+  if (
+    normalizedStep === "DONE" ||
+    normalizedStep.includes("FINAL") ||
+    normalizedStep.includes("COMPLETE")
+  ) {
+    return "FINALIZE";
+  }
+  return null;
+};
+
+const getPhaseLabel = (phase?: string | null) => {
+  if (!phase) {
+    return null;
+  }
+  const normalized = phase.trim().toUpperCase();
+  const labels: Record<string, string> = {
+    PREVIEW: "Preparing preview",
+    TRACKING: "Tracking players",
+    FEATURES: "Extracting features",
+    SCORING: "Scoring",
+    CLIPS: "Generating clips",
+    FINALIZE: "Finalizing output"
+  };
+  return labels[normalized] ?? phase.toLowerCase();
+};
 const getClosestPreviewFrame = (frames: PreviewFrame[], timeSec: number) =>
   frames.reduce<PreviewFrame | null>((closest, frame) => {
     const frameTime = getSelectionTimeSec(frame);
@@ -636,6 +696,12 @@ export default function JobRunner() {
   const step = job?.progress?.step ?? "—";
   const normalizedStep =
     typeof step === "string" ? step.trim().toUpperCase() : null;
+  const progressPhase = getProgressPhase(job);
+  const progressPhaseLabel = getPhaseLabel(progressPhase);
+  const progressStats =
+    job?.progress && typeof job.progress === "object"
+      ? ((job.progress as Record<string, unknown>).stats as Record<string, unknown> | undefined)
+      : undefined;
   const displayStatus = job?.status ?? "WAITING";
   const displayStatusLabel = getStatusLabel(displayStatus);
 
@@ -802,30 +868,45 @@ export default function JobRunner() {
             : null;
   const errorDetail = rawErrorDetail?.trim() ?? null;
   const hasAutodetectErrorDetail = Boolean(errorDetail);
-  const framesProcessed = coerceNumber(
-    job?.progress && typeof job.progress === "object"
-      ? (job.progress as Record<string, unknown>).framesProcessed ??
-          (job.progress as Record<string, unknown>).frames_processed ??
-          (job.progress as Record<string, unknown>).processedFrames ??
-          (job.progress as Record<string, unknown>).processed_frames
-      : null
+  const framesUsed = coerceNumber(
+    progressStats?.frames_used ??
+      progressStats?.framesUsed ??
+      (job?.progress as Record<string, unknown> | undefined)?.frames_used ??
+      (job?.progress as Record<string, unknown> | undefined)?.framesUsed
   );
   const sampleFramesCount = coerceNumber(
-    job?.result?.evidence_metrics?.candidate_metrics?.sampleFramesCount
+    progressStats?.sampleFramesCount ??
+      progressStats?.sample_frames_count ??
+      job?.result?.evidence_metrics?.candidate_metrics?.sampleFramesCount
   );
   const sprintsCount = coerceNumber(job?.result?.evidence_metrics?.sprints_count);
   const framesProcessedFallback = sampleFramesCount ?? sprintsCount ?? 0;
   const framesProcessedCount = Math.max(
-    framesProcessed && framesProcessed > 0 ? framesProcessed : framesProcessedFallback,
+    framesUsed && framesUsed > 0 ? framesUsed : framesProcessedFallback,
+    0
+  );
+  const framesTotal = coerceNumber(
+    progressStats?.frames_total ??
+      progressStats?.framesTotal ??
+      (job?.progress as Record<string, unknown> | undefined)?.frames_total ??
+      (job?.progress as Record<string, unknown> | undefined)?.framesTotal
+  );
+  const framesTotalCount = Math.max(framesTotal ?? 0, 0);
+  const detectionsCount = Math.max(
+    coerceNumber(
+      progressStats?.detections_count ??
+        progressStats?.detectionsCount ??
+        (job?.progress as Record<string, unknown> | undefined)?.detections_count
+    ) ?? 0,
     0
   );
   const totalTracks = coerceNumber(
-    job?.progress && typeof job.progress === "object"
-      ? (job.progress as Record<string, unknown>).totalTracks ??
-          (job.progress as Record<string, unknown>).total_tracks ??
-          (job.progress as Record<string, unknown>).tracksTotal ??
-          (job.progress as Record<string, unknown>).tracks_total
-      : null
+    progressStats?.tracklets_count ??
+      progressStats?.trackletsCount ??
+      (job?.progress as Record<string, unknown> | undefined)?.totalTracks ??
+      (job?.progress as Record<string, unknown> | undefined)?.total_tracks ??
+      (job?.progress as Record<string, unknown> | undefined)?.tracksTotal ??
+      (job?.progress as Record<string, unknown> | undefined)?.tracks_total
   );
   const totalTracksCount = Math.max(totalTracks ?? 0, 0);
   const isProcessingWithoutCandidates =
@@ -912,6 +993,9 @@ export default function JobRunner() {
     !previewError;
   const progressLabel = formatProgressPercent(pct) ?? "0%";
   const demoStatusLabel = (() => {
+    if (normalizedStep === "DONE") {
+      return "Completed";
+    }
     if (isLoadingFrames) {
       return "Loading frames";
     }
@@ -921,14 +1005,13 @@ export default function JobRunner() {
     if (effectiveStep === "TARGET") {
       return "Select target";
     }
-    if (shouldShowResult) {
-      return "Completed";
-    }
     if (normalizedStatus === "FAILED") {
       return "Failed";
     }
     if (normalizedStatus === "RUNNING" || normalizedStatus === "PROCESSING" || polling) {
-      return `Analyzing (${progressLabel})`;
+      return progressPhaseLabel
+        ? `${progressPhaseLabel} (${progressLabel})`
+        : `Analyzing (${progressLabel})`;
     }
     return displayStatusLabel;
   })();
@@ -1310,15 +1393,22 @@ export default function JobRunner() {
     let backoffMs = 2000;
     const maxBackoffMs = 8000;
 
-    const getPollInterval = (step?: string | null) => {
-      if (!step) {
-        return 3000;
-      }
-      if (step.toUpperCase().includes("TRACKING")) {
+    const getPollInterval = (phase?: string | null, step?: string | null) => {
+      const normalizedPhase = phase?.toUpperCase() ?? "";
+      const normalizedStep = step?.toUpperCase() ?? "";
+      if (normalizedPhase === "TRACKING" || normalizedStep.includes("TRACK")) {
         return 4000;
       }
-      if (step.toUpperCase().includes("SCORING")) {
+      if (normalizedPhase === "SCORING" || normalizedStep.includes("SCOR")) {
         return 2000;
+      }
+      if (
+        normalizedPhase === "FEATURES" ||
+        normalizedPhase === "CLIPS" ||
+        normalizedStep.includes("FEATURE") ||
+        normalizedStep.includes("CLIP")
+      ) {
+        return 2500;
       }
       return 3000;
     };
@@ -1354,7 +1444,10 @@ export default function JobRunner() {
           return;
         }
 
-        const nextInterval = getPollInterval(normalizedJob.progress?.step ?? null);
+        const nextInterval = getPollInterval(
+          getProgressPhase(normalizedJob),
+          normalizedJob.progress?.step ?? null
+        );
         timeoutId = setTimeout(poll, nextInterval);
       } catch (pollError) {
         const status = (pollError as { status?: number }).status;
@@ -2833,12 +2926,22 @@ export default function JobRunner() {
                   <p className="mt-2 text-xs text-slate-500">
                     {job?.progress?.message ?? "No message"}
                   </p>
+                  <div className="mt-3 border-t border-slate-800 pt-3 text-xs text-slate-400">
+                    <p>
+                      <span className="text-slate-500">Phase:</span>{" "}
+                      {progressPhaseLabel ?? "—"}
+                    </p>
+                    <p className="mt-1">
+                      <span className="text-slate-500">Stats:</span>{" "}
+                      {`frames ${framesProcessedCount}/${framesTotalCount || "—"} · sample ${sampleFramesCount ?? "—"} · detections ${detectionsCount} · tracklets ${totalTracksCount}`}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
                     <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                      Frames processed
+                      Frames used
                     </p>
                     <p className="mt-2 text-sm text-slate-200">
                       {framesProcessedCount}
