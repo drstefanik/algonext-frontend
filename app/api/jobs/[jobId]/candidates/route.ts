@@ -5,12 +5,13 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     jobId: string;
-  };
+  }>;
 };
 
 export async function GET(request: Request, context: RouteContext) {
+  const resolvedParams = await context.params;
   const { jobId } = context.params;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {

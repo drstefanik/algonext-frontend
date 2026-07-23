@@ -5,13 +5,14 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     jobId: string;
     filename: string;
-  };
+  }>;
 };
 
 export async function GET(request: Request, { params }: RouteContext) {
+  const resolvedParams = await params;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {
@@ -20,8 +21,8 @@ export async function GET(request: Request, { params }: RouteContext) {
     });
   }
 
-  const jobId = encodeURIComponent(params.jobId);
-  const filename = encodeURIComponent(params.filename);
+  const jobId = encodeURIComponent(resolvedParams.jobId);
+  const filename = encodeURIComponent(resolvedParams.filename);
   const url = `${base}/jobs/${jobId}/candidates/${filename}`;
 
   return forward(request, url, {
