@@ -6,6 +6,7 @@ on:
       - agent/upgrade-next-15-security
     paths:
       - ".github/workflows/upgrade-next-15-security.yml"
+      - "scripts/migrate_next15_route_params.py"
 
 permissions:
   contents: write
