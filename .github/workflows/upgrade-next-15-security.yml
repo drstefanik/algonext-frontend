@@ -1,0 +1,44 @@
+name: Upgrade Next.js security dependencies
+
+on:
+  push:
+    branches:
+      - agent/upgrade-next-15-security
+    paths:
+      - ".github/workflows/upgrade-next-15-security.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out upgrade branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install patched framework and React releases
+        run: |
+          npm install --save-exact next@15.5.21 react@19.2.8 react-dom@19.2.8
+          npm install --save-dev --save-exact @types/react@19.2.17 @types/react-dom@19.2.3
+
+      - name: Commit reproducible dependency metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "Dependency files are already current."
+            exit 0
+          fi
+          git commit -m "Upgrade Next.js and React security releases"
+          git push origin HEAD:agent/upgrade-next-15-security
