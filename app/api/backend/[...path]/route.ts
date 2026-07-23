@@ -39,6 +39,9 @@ const getApiBaseUrl = () => {
   return parsed;
 };
 
+const isSingleJobRead = (request: Request, path: string[]) =>
+  request.method === "GET" && path.length === 2 && path[0] === "jobs" && Boolean(path[1]);
+
 const buildTargetUrl = (request: Request, path: string[]) => {
   const base = getApiBaseUrl();
   const safePath = path
@@ -46,7 +49,12 @@ const buildTargetUrl = (request: Request, path: string[]) => {
     .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
     .join("/");
   base.pathname = `${base.pathname}/${safePath}`.replace(/\/{2,}/g, "/");
-  base.search = new URL(request.url).search;
+
+  const incoming = new URL(request.url);
+  base.search = incoming.search;
+  if (isSingleJobRead(request, path) && !base.searchParams.has("view")) {
+    base.searchParams.set("view", "full");
+  }
   return base;
 };
 
