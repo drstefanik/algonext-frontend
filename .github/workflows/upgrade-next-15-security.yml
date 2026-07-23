@@ -31,8 +31,8 @@ jobs:
           npm install --save-exact next@15.5.21 react@19.2.8 react-dom@19.2.8
           npm install --save-dev --save-exact @types/react@19.2.17 @types/react-dom@19.2.3
 
-      - name: Migrate asynchronous request APIs
-        run: CI=1 npx --yes @next/codemod@15.5.21 next-async-request-api . --force
+      - name: Migrate asynchronous route params
+        run: python scripts/migrate_next15_route_params.py
 
       - name: Commit generated migration and lockfile
         run: |
