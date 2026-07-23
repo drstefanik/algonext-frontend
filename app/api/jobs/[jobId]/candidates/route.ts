@@ -12,7 +12,7 @@ type RouteContext = {
 
 export async function GET(request: Request, context: RouteContext) {
   const resolvedParams = await context.params;
-  const { jobId } = context.params;
+  const { jobId } = resolvedParams;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {

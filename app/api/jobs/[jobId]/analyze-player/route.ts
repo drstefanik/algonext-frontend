@@ -11,6 +11,7 @@ type RouteContext = {
 };
 
 export async function POST(request: Request, { params }: RouteContext) {
+  const resolvedParams = await params;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {
