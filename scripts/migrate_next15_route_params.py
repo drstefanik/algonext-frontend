@@ -17,7 +17,8 @@ DESTRUCTURED_HANDLER_PATTERN = re.compile(
     r"(?:export\s+async\s+function\s+\w+\s*\(|export\s+const\s+\w+\s*=\s*async\s*\()"
     r".*?\{\s*params\s*\}\s*:\s*RouteContext\s*"
     r"(?:\)\s*\{|=>\s*\{)"
-    r")",
+    r")"
+    r"(?!\s*const\s+resolvedParams\s*=\s*await\s+params\s*;)",
     re.DOTALL,
 )
 
@@ -30,40 +31,45 @@ CONTEXT_HANDLER_PATTERN = re.compile(
     re.DOTALL,
 )
 
+CONTEXT_AWAIT_PATTERN = re.compile(
+    r"const\s+resolvedParams\s*=\s*await\s+"
+    r"(?P<context_name>[A-Za-z_$][\w$]*)\.params\s*;"
+)
 
-def migrate_route(path: Path) -> tuple[bool, str | None]:
-    original = path.read_text(encoding="utf-8")
-    if "type RouteContext" not in original or "params: Promise<" in original:
-        return False, None
 
-    migrated, context_count = ROUTE_CONTEXT_PATTERN.subn(
+def migrate_context_type(source: str) -> tuple[str, bool]:
+    if "params: Promise<" in source:
+        return source, False
+
+    migrated, count = ROUTE_CONTEXT_PATTERN.subn(
         lambda match: (
             f"{match.group(1)}params: Promise<{{"
             f"{match.group('body')}"
             f"\n  }}>;"
             f"{match.group('suffix')}"
         ),
-        original,
+        source,
         count=1,
     )
-    if context_count == 0:
-        return False, "unrecognized RouteContext declaration"
+    return migrated, count > 0
 
-    handler_count = 0
 
+def insert_missing_awaits(source: str) -> tuple[str, int]:
     migrated, destructured_count = DESTRUCTURED_HANDLER_PATTERN.subn(
         lambda match: f"{match.group(1)}\n  const resolvedParams = await params;",
-        migrated,
+        source,
     )
-    if destructured_count:
-        handler_count += destructured_count
-        migrated = migrated.replace("params.", "resolvedParams.")
 
+    context_count = 0
     context_names = {
         match.group("context_name")
         for match in CONTEXT_HANDLER_PATTERN.finditer(migrated)
     }
     for context_name in context_names:
+        declaration = f"const resolvedParams = await {context_name}.params;"
+        if declaration in migrated:
+            continue
+
         pattern = re.compile(
             r"("
             r"(?:export\s+async\s+function\s+\w+\s*\(|export\s+const\s+\w+\s*=\s*async\s*\()"
@@ -73,20 +79,53 @@ def migrate_route(path: Path) -> tuple[bool, str | None]:
             re.DOTALL,
         )
         migrated, count = pattern.subn(
-            lambda match: (
-                f"{match.group(1)}\n"
-                f"  const resolvedParams = await {context_name}.params;"
-            ),
+            lambda match: f"{match.group(1)}\n  {declaration}",
             migrated,
         )
-        if count:
-            handler_count += count
-            migrated = migrated.replace(
-                f"{context_name}.params.",
-                "resolvedParams.",
-            )
+        context_count += count
 
-    if handler_count == 0:
+    return migrated, destructured_count + context_count
+
+
+def cleanup_param_usages(source: str) -> str:
+    migrated = source
+
+    context_declarations = list(CONTEXT_AWAIT_PATTERN.finditer(migrated))
+    for index, match in enumerate(context_declarations):
+        context_name = match.group("context_name")
+        declaration = match.group(0)
+        token = f"__ALGO_NEXT_CONTEXT_AWAIT_{index}__"
+        migrated = migrated.replace(declaration, token)
+        migrated = migrated.replace(f"{context_name}.params", "resolvedParams")
+        migrated = migrated.replace(token, declaration)
+
+    destructured_declaration = "const resolvedParams = await params;"
+    if destructured_declaration in migrated:
+        token = "__ALGO_NEXT_DESTRUCTURED_AWAIT__"
+        migrated = migrated.replace(destructured_declaration, token)
+        migrated = migrated.replace("params.", "resolvedParams.")
+        migrated = re.sub(r"=\s*params\s*;", "= resolvedParams;", migrated)
+        migrated = migrated.replace(token, destructured_declaration)
+
+    return migrated
+
+
+def migrate_route(path: Path) -> tuple[bool, str | None]:
+    original = path.read_text(encoding="utf-8")
+    if "type RouteContext" not in original:
+        return False, None
+
+    migrated, context_changed = migrate_context_type(original)
+    if not context_changed and "params: Promise<" not in migrated:
+        return False, "unrecognized RouteContext declaration"
+
+    migrated, inserted_awaits = insert_missing_awaits(migrated)
+    migrated = cleanup_param_usages(migrated)
+
+    if migrated == original:
+        return False, None
+
+    if inserted_awaits == 0 and "const resolvedParams = await" not in migrated:
         return False, "unrecognized route handler signature"
 
     path.write_text(migrated, encoding="utf-8")
