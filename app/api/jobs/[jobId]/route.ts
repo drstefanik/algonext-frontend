@@ -5,12 +5,13 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     jobId: string;
-  };
+  }>;
 };
 
 export async function GET(request: Request, { params }: RouteContext) {
+  const resolvedParams = await params;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {
@@ -20,7 +21,7 @@ export async function GET(request: Request, { params }: RouteContext) {
   }
 
   const { search } = new URL(request.url);
-  const url = `${base}/jobs/${encodeURIComponent(params.jobId)}${search}`;
+  const url = `${base}/jobs/${encodeURIComponent(resolvedParams.jobId)}${search}`;
 
   return forward(request, url, { methodOverride: "GET", includeBody: false });
 }

@@ -19,9 +19,9 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
 ]);
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     path: string[];
-  };
+  }>;
 };
 
 const getApiBaseUrl = () => {
@@ -71,12 +71,13 @@ const buildResponseHeaders = (upstream: Response, requestId: string) => {
 };
 
 const proxy = async (request: Request, context: RouteContext) => {
+  const { path } = await context.params;
   const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const target = buildTargetUrl(request, context.params.path);
+    const target = buildTargetUrl(request, path);
     const includeBody = request.method !== "GET" && request.method !== "HEAD";
     const body = includeBody ? await request.arrayBuffer() : undefined;
     const upstream = await fetch(target, {
@@ -98,7 +99,7 @@ const proxy = async (request: Request, context: RouteContext) => {
     console.error("[backend-proxy] upstream request failed", {
       requestId,
       method: request.method,
-      path: context.params.path.join("/"),
+      path: path.join("/"),
       timedOut
     });
     return NextResponse.json(

@@ -5,13 +5,14 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     jobId: string;
-  };
+  }>;
 };
 
 export async function GET(request: Request, context: RouteContext) {
-  const { jobId } = context.params;
+  const resolvedParams = await context.params;
+  const { jobId } = resolvedParams;
   const base = (process.env.API_BASE_URL || "").replace(/\/+$/, "");
   if (!base) {
     return new Response("API_BASE_URL missing", {
