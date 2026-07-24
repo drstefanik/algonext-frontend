@@ -16,6 +16,7 @@ import {
   type PreviewTrack,
   WorkflowApiError
 } from "@/lib/workflow-api";
+import { retryJob } from "@/lib/retry-job";
 
 const STORAGE_KEY = "algonext.current-job.v2";
 const TERMINAL_STATUSES = new Set(["COMPLETED", "PARTIAL", "FAILED"]);
@@ -47,7 +48,9 @@ const mergeFrames = (primary: PreviewFrame[], fallback: PreviewFrame[]) => {
     });
   }
   return [...byKey.values()].sort(
-    (left, right) => (left.timeSec ?? Number.MAX_SAFE_INTEGER) - (right.timeSec ?? Number.MAX_SAFE_INTEGER)
+    (left, right) =>
+      (left.timeSec ?? Number.MAX_SAFE_INTEGER) -
+      (right.timeSec ?? Number.MAX_SAFE_INTEGER)
   );
 };
 
@@ -73,10 +76,21 @@ export const getWorkflowStage = (
   return "preparing";
 };
 
+const ERROR_MESSAGES: Record<string, string> = {
+  WORKER_NOT_READY:
+    "Il worker di analisi non è ancora pronto o non esegue la stessa versione del backend. Attendi il completamento del deploy e riprova.",
+  RETRY_LIMIT_REACHED:
+    "Questo job ha raggiunto il numero massimo di tentativi automatici.",
+  RETRY_NOT_READY:
+    "Il job non conserva una selezione completa del giocatore e non può essere riavviato in sicurezza.",
+  RETRY_ENQUEUE_FAILED:
+    "Il worker è disponibile, ma il nuovo tentativo non è entrato nella coda."
+};
+
 const formatError = (error: unknown) => {
   if (error instanceof WorkflowApiError) {
     const requestSuffix = error.requestId ? ` · request ${error.requestId}` : "";
-    return `${error.message}${requestSuffix}`;
+    return `${ERROR_MESSAGES[error.code] ?? error.message}${requestSuffix}`;
   }
   return error instanceof Error ? error.message : "Errore inatteso.";
 };
@@ -122,7 +136,9 @@ export function useAnalysisWorkflow() {
 
         if (nextJob.previewFrames.length === 0 && !TERMINAL_STATUSES.has(nextJob.status)) {
           const fallback = await loadFrames(nextJob.id, []);
-          if (fallback.length > 0) setFrames((existing) => mergeFrames(existing, fallback));
+          if (fallback.length > 0) {
+            setFrames((existing) => mergeFrames(existing, fallback));
+          }
         }
         return nextJob;
       } catch (refreshError) {
@@ -248,6 +264,21 @@ export function useAnalysisWorkflow() {
     }
   }, [jobId, refresh]);
 
+  const retry = useCallback(async () => {
+    if (!jobId) return;
+    setBusyAction("retry");
+    setError(null);
+    pollGeneration.current += 1;
+    try {
+      await retryJob(jobId);
+      await refresh(jobId, { silent: true });
+    } catch (retryError) {
+      setError(formatError(retryError));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [jobId, refresh]);
+
   const reset = useCallback(() => {
     pollGeneration.current += 1;
     setJob(null);
@@ -277,6 +308,7 @@ export function useAnalysisWorkflow() {
     refresh,
     choosePlayer,
     enqueue,
+    retry,
     reset,
     setSelection
   };
