@@ -27,7 +27,24 @@ const WARNING_LABELS: Record<string, string> = {
     "Il budget di tracking è terminato: il job continua con dati parziali e senza voto.",
   RETRY_ENQUEUE_FAILED: "Il nuovo tentativo non è entrato nella coda del worker.",
   WORKER_RESTARTED:
-    "Il worker è stato riavviato durante l’analisi. Il job può essere ripreso senza rifare la selezione."
+    "Il worker è stato riavviato durante l’analisi. Il job può essere ripreso senza rifare la selezione.",
+  TRACKING_EVIDENCE_INSUFFICIENT:
+    "L’evidenza di tracking è insufficiente per una valutazione attendibile.",
+  CROSS_SHOT_IDENTITY_UNVALIDATED:
+    "L’identità del giocatore non è verificata tra cambi camera, replay e occlusioni.",
+  LONG_TRACKING_GAPS:
+    "Sono presenti lunghe interruzioni nel tracking del giocatore.",
+  PLAYER_EVALUATION_WITHHELD:
+    "La valutazione del giocatore è sospesa per evitare un punteggio non validato.",
+  LOW_TRACKING_COVERAGE:
+    "Il giocatore è stato seguito in una porzione troppo ridotta della partita.",
+  LOW_TRACKLET_CONTINUITY:
+    "Le tracce disponibili non sono abbastanza continue.",
+  CONTINUITY_NOT_MEASURED:
+    "La continuità del tracking non è stata misurata.",
+  INSUFFICIENT_TRACKING_SAMPLES:
+    "I campioni osservati non sono sufficienti per una conclusione affidabile.",
+  MISSING_CLIPS: "Una o più clip previste non sono disponibili."
 };
 
 const metric = (value: number | null) =>
