@@ -111,7 +111,8 @@ export default function JobRunner() {
               </p>
               <h2 className="mt-2 text-2xl font-bold text-white">Carica una partita</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-                Il nuovo flusso segue direttamente la macchina a stati del backend: crea il job, prepara i frame, conferma un giocatore e avvia l’analisi.
+                Il flusso segue direttamente la macchina a stati del backend: crea il job,
+                prepara i frame, conferma un giocatore e avvia l’analisi.
               </p>
             </div>
             <JobCreateForm busy={workflow.busyAction === "create"} onSubmit={workflow.start} />
@@ -140,9 +141,10 @@ export default function JobRunner() {
             </form>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 text-sm leading-6 text-slate-400">
-              <p className="font-semibold text-slate-200">Cosa è cambiato</p>
+              <p className="font-semibold text-slate-200">Flusso resiliente</p>
               <p className="mt-2">
-                Un solo client API, polling centralizzato, errori con request ID e selezione giocatore atomica. Il job resta recuperabile anche dopo un refresh della pagina.
+                Polling centralizzato, errori con request ID, heartbeat del worker e retry del
+                medesimo job senza perdere video o selezione.
               </p>
             </div>
           </aside>
@@ -155,7 +157,8 @@ export default function JobRunner() {
           <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
             <h2 className="text-lg font-semibold text-white">Preparazione automatica</h2>
             <p className="mt-2 text-sm leading-6 text-slate-400">
-              Il worker sta estraendo i frame e rilevando le tracce. Non serve ricaricare la pagina; il polling riprenderà automaticamente anche dopo un errore temporaneo.
+              Il worker sta estraendo i frame e rilevando le tracce. Non serve ricaricare la
+              pagina; il polling riprenderà automaticamente anche dopo un errore temporaneo.
             </p>
             <div className="mt-5 flex items-center gap-3 text-sm text-slate-300">
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
@@ -189,7 +192,8 @@ export default function JobRunner() {
             </p>
             <h2 className="mt-2 text-2xl font-bold text-white">Il job è pronto</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50/80">
-              Il riferimento giocatore e il target risultano confermati. Avvia ora il worker di analisi completa.
+              Il riferimento giocatore e il target risultano confermati. Avvia ora il worker di
+              analisi completa.
             </p>
             <button
               type="button"
@@ -210,10 +214,11 @@ export default function JobRunner() {
           <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
             <h2 className="text-lg font-semibold text-white">Pipeline in esecuzione</h2>
             <p className="mt-2 text-sm leading-6 text-slate-400">
-              Tracking, feature extraction, scoring e generazione clip procedono in background. Puoi chiudere la pagina e riaprire lo stesso job più tardi.
+              Il backend ora espone heartbeat e avanzamento delle finestre. I dati preliminari
+              non vengono mostrati durante il run, per non confonderli con il risultato finale.
+              Puoi chiudere la pagina e riaprire lo stesso job più tardi.
             </p>
           </section>
-          {workflow.job.result ? <ResultPanel job={workflow.job} preliminary /> : null}
         </div>
       ) : null}
 
@@ -239,15 +244,36 @@ export default function JobRunner() {
                 Motivo: {workflow.job.failureReason}
               </p>
             ) : null}
-            <button
-              type="button"
-              onClick={workflow.reset}
-              className="mt-5 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950"
-            >
-              Crea un nuovo job
-            </button>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-rose-100/75">
+              {workflow.job.playerSaved && workflow.job.targetSaved
+                ? "Il video, i frame e la selezione del giocatore restano salvati. Il retry riusa lo stesso job e il nuovo profilo CPU, senza ripetere la scelta manuale."
+                : "Il job non contiene ancora una selezione completa e non può essere riavviato in sicurezza. Crea un nuovo job dopo aver corretto la sorgente del video."}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              {workflow.job.playerSaved && workflow.job.targetSaved ? (
+                <button
+                  type="button"
+                  onClick={() => void workflow.retry()}
+                  disabled={workflow.busyAction === "retry"}
+                  className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-slate-100 disabled:opacity-50"
+                >
+                  {workflow.busyAction === "retry" ? "Riavvio…" : "Riprova analisi"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={workflow.reset}
+                disabled={workflow.isBusy}
+                className="rounded-xl border border-rose-200/30 px-5 py-2.5 text-sm font-bold text-rose-100 transition hover:bg-rose-500/10 disabled:opacity-50"
+              >
+                Crea un nuovo job
+              </button>
+            </div>
           </section>
-          {workflow.job.result ? <ResultPanel job={workflow.job} preliminary /> : null}
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 text-sm leading-6 text-slate-400">
+            La diagnostica preliminare non viene mostrata dopo un errore: non rappresenta il run
+            completo e non deve essere interpretata come risultato del giocatore.
+          </section>
         </div>
       ) : null}
     </div>

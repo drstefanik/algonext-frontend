@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
 import type { AnalysisJob } from "@/lib/workflow-api";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -17,23 +21,101 @@ const STATUS_LABELS: Record<string, string> = {
   FAILED: "Errore"
 };
 
-const metric = (value: number | null) => (value === null ? "—" : String(Math.round(value)));
+const WARNING_LABELS: Record<string, string> = {
+  TRACKING_TIMEOUT: "Il tracking ha superato il limite operativo.",
+  TRACKING_PARTIAL_TIMEOUT:
+    "Il budget di tracking è terminato: il job continua con dati parziali e senza voto.",
+  RETRY_ENQUEUE_FAILED: "Il nuovo tentativo non è entrato nella coda del worker.",
+  WORKER_RESTARTED:
+    "Il worker è stato riavviato durante l’analisi. Il job può essere ripreso senza rifare la selezione."
+};
+
+const metric = (value: number | null) =>
+  value === null ? "—" : String(Math.round(value));
+
+const relativeUpdate = (value: string | null, now: number | null) => {
+  if (!value) return { label: "—", stale: false };
+  if (now === null) return { label: "in attesa", stale: false };
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return { label: "—", stale: false };
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 15) return { label: "adesso", stale: false };
+  if (seconds < 60) return { label: `${seconds} s fa`, stale: false };
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return { label: `${minutes} min fa`, stale: minutes >= 3 };
+  const hours = Math.floor(minutes / 60);
+  return { label: `${hours} h fa`, stale: true };
+};
+
+const parseWindowProgress = (message: string | null) => {
+  if (!message) return null;
+  const exact = message.match(/(\d+)\s*\/\s*(\d+)\s*finestre/i);
+  if (exact) {
+    return {
+      completed: Number(exact[1]),
+      total: Number(exact[2]),
+      label: `${exact[1]} / ${exact[2]}`
+    };
+  }
+  const percent = message.match(/(\d{1,3})%\s*finestre/i);
+  return percent
+    ? { completed: null, total: null, label: `${percent[1]}%` }
+    : null;
+};
 
 export function JobProgressPanel({ job }: { job: AnalysisJob }) {
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const interval = window.setInterval(update, 15_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   const pct = Math.max(0, Math.min(100, job.progress.pct));
   const statusLabel = STATUS_LABELS[job.status] ?? job.status;
+  const isFailed = job.status === "FAILED";
+  const isActive = ["QUEUED", "RUNNING", "PROCESSING"].includes(job.status);
+  const trackingPhase =
+    job.progress.phase === "TRACKING" ||
+    Boolean(job.progress.step?.toUpperCase().includes("TRACK"));
+  const windowProgress = parseWindowProgress(job.progress.message);
+  const heartbeat = relativeUpdate(job.progress.updatedAt ?? job.updatedAt, now);
+  const stale = isActive && heartbeat.stale;
 
   return (
-    <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+    <section
+      className={`rounded-2xl border p-5 ${
+        isFailed
+          ? "border-rose-500/30 bg-rose-950/20"
+          : stale
+            ? "border-amber-500/30 bg-amber-950/10"
+            : "border-slate-800 bg-slate-900/50"
+      }`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">
+          <p
+            className={`text-xs font-semibold uppercase tracking-[0.2em] ${
+              isFailed
+                ? "text-rose-300"
+                : stale
+                  ? "text-amber-300"
+                  : "text-emerald-400"
+            }`}
+          >
             {statusLabel}
           </p>
           <h2 className="mt-2 text-lg font-semibold text-white">
             {job.progress.message ?? "Elaborazione del job"}
           </h2>
           <p className="mt-1 break-all font-mono text-xs text-slate-500">{job.id}</p>
+          {stale ? (
+            <p className="mt-3 text-sm text-amber-200">
+              Nessun heartbeat recente. Il polling continua, ma il worker potrebbe essere rallentato.
+            </p>
+          ) : null}
         </div>
         <div className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-right">
           <p className="text-2xl font-bold text-white">{Math.round(pct)}%</p>
@@ -45,26 +127,40 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
 
       <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-800">
         <div
-          className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+          className={`h-full rounded-full transition-[width] duration-500 ${
+            isFailed ? "bg-rose-500" : stale ? "bg-amber-400" : "bg-emerald-500"
+          }`}
           style={{ width: `${pct}%` }}
         />
       </div>
 
       <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Frame usati</dt>
+          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
+            {trackingPhase ? "Finestre elaborate" : "Campioni preliminari"}
+          </dt>
           <dd className="mt-1 text-lg font-semibold text-slate-100">
-            {metric(job.progress.stats.framesUsed ?? job.framesProcessed)}
+            {trackingPhase
+              ? windowProgress?.label ?? "in corso"
+              : metric(job.progress.stats.framesUsed ?? job.framesProcessed)}
           </dd>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Frame totali</dt>
-          <dd className="mt-1 text-lg font-semibold text-slate-100">
-            {metric(job.progress.stats.framesTotal)}
+          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
+            Ultimo heartbeat
+          </dt>
+          <dd
+            className={`mt-1 text-lg font-semibold ${
+              stale ? "text-amber-200" : "text-slate-100"
+            }`}
+          >
+            {heartbeat.label}
           </dd>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Rilevamenti</dt>
+          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
+            Rilevamenti
+          </dt>
           <dd className="mt-1 text-lg font-semibold text-slate-100">
             {metric(job.progress.stats.detections)}
           </dd>
@@ -84,7 +180,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
           </p>
           <ul className="mt-2 space-y-1 text-sm text-amber-100">
             {job.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
+              <li key={warning}>{WARNING_LABELS[warning] ?? warning}</li>
             ))}
           </ul>
         </div>
