@@ -22,15 +22,11 @@ export const savePlayerProfile = async (
   jobId: string,
   profile: PlayerProfileInput
 ): Promise<void> => {
-  const payload: Record<string, unknown> = {};
-  const playerName = profile.playerName?.trim();
-  const teamName = profile.teamName?.trim();
-
-  if (playerName) payload.player_name = playerName;
-  if (teamName) payload.team_name = teamName;
-  if (profile.shirtNumber !== undefined) payload.shirt_number = profile.shirtNumber;
-
-  if (Object.keys(payload).length === 0) return;
+  const payload = {
+    player_name: profile.playerName?.trim() || null,
+    team_name: profile.teamName?.trim() || null,
+    shirt_number: profile.shirtNumber ?? null
+  };
 
   const response = await fetch(
     `${API_PREFIX}/jobs/${encodeURIComponent(jobId)}/player-profile`,
