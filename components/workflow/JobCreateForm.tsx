@@ -28,15 +28,12 @@ export function JobCreateForm({
   const [bucket, setBucket] = useState("fnh");
   const [role, setRole] = useState("Midfielder");
   const [category, setCategory] = useState("U17");
-  const [teamName, setTeamName] = useState("");
-  const [shirtNumber, setShirtNumber] = useState("");
   const [fullMatchMode, setFullMatchMode] = useState(true);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedSource = source.trim();
-    const normalizedTeam = teamName.trim();
     if (!normalizedSource) {
       setValidationError("Inserisci l’URL del video oppure la chiave dell’oggetto.");
       return;
@@ -49,19 +46,6 @@ export function JobCreateForm({
       setValidationError("Indica il bucket che contiene il video.");
       return;
     }
-    if (!normalizedTeam) {
-      setValidationError("Il nome della squadra è necessario per creare il job.");
-      return;
-    }
-
-    const parsedShirtNumber = shirtNumber.trim() ? Number(shirtNumber) : undefined;
-    if (
-      parsedShirtNumber !== undefined &&
-      (!Number.isInteger(parsedShirtNumber) || parsedShirtNumber < 0 || parsedShirtNumber > 99)
-    ) {
-      setValidationError("Il numero di maglia deve essere un intero tra 0 e 99.");
-      return;
-    }
 
     setValidationError(null);
     await onSubmit({
@@ -70,8 +54,9 @@ export function JobCreateForm({
       bucket: sourceMode === "object" ? bucket.trim() : undefined,
       role,
       category,
-      teamName: normalizedTeam,
-      shirtNumber: parsedShirtNumber,
+      // Il backend storico richiede ancora team_name alla creazione. Il valore
+      // descrittivo reale viene associato solo dopo la selezione visiva.
+      teamName: "Da associare",
       fullMatchMode
     });
   };
@@ -142,56 +127,41 @@ export function JobCreateForm({
         )}
       </div>
 
-      <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
-        <label>
-          <span className={labelClass}>Ruolo</span>
-          <select
-            value={role}
-            onChange={(event: ChangeEvent<HTMLSelectElement>) => setRole(event.target.value)}
-            className={inputClass}
-            disabled={busy}
-          >
-            {ROLES.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className={labelClass}>Categoria</span>
-          <select
-            value={category}
-            onChange={(event: ChangeEvent<HTMLSelectElement>) => setCategory(event.target.value)}
-            className={inputClass}
-            disabled={busy}
-          >
-            {CATEGORIES.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className={labelClass}>Squadra</span>
-          <input
-            value={teamName}
-            onChange={(event: ChangeEvent<HTMLInputElement>) => setTeamName(event.target.value)}
-            className={inputClass}
-            placeholder="AS Roma"
-            disabled={busy}
-          />
-        </label>
-        <label>
-          <span className={labelClass}>Numero maglia</span>
-          <input
-            value={shirtNumber}
-            onChange={(event: ChangeEvent<HTMLInputElement>) => setShirtNumber(event.target.value)}
-            className={inputClass}
-            type="number"
-            min={0}
-            max={99}
-            placeholder="8"
-            disabled={busy}
-          />
-        </label>
+      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+        <p className={labelClass}>Contesto dell’analisi</p>
+        <p className="mt-2 text-sm leading-6 text-slate-400">
+          Ruolo e categoria servono a contestualizzare il report. Nome, squadra e numero di
+          maglia verranno associati al giocatore soltanto dopo che avrai cliccato il riquadro
+          corretto nel passaggio successivo.
+        </p>
+        <div className="mt-4 grid gap-5 md:grid-cols-2">
+          <label>
+            <span className={labelClass}>Ruolo del giocatore</span>
+            <select
+              value={role}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => setRole(event.target.value)}
+              className={inputClass}
+              disabled={busy}
+            >
+              {ROLES.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className={labelClass}>Categoria</span>
+            <select
+              value={category}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => setCategory(event.target.value)}
+              className={inputClass}
+              disabled={busy}
+            >
+              {CATEGORIES.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -221,7 +191,7 @@ export function JobCreateForm({
         disabled={busy}
         className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
       >
-        {busy ? "Creazione in corso…" : "Crea job e prepara i frame"}
+        {busy ? "Creazione in corso…" : "Crea job e rileva i giocatori"}
       </button>
     </form>
   );
