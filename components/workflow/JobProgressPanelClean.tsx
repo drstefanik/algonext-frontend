@@ -47,17 +47,18 @@ const WARNING_LABELS: Record<string, string> = {
   MISSING_CLIPS: "Una o più clip previste non sono disponibili."
 };
 
-const RESULT_ONLY_WARNINGS = new Set([
-  "TRACKING_EVIDENCE_INSUFFICIENT",
-  "CROSS_SHOT_IDENTITY_UNVALIDATED",
-  "LONG_TRACKING_GAPS",
-  "PLAYER_EVALUATION_WITHHELD",
-  "LOW_TRACKING_COVERAGE",
-  "LOW_TRACKLET_CONTINUITY",
-  "CONTINUITY_NOT_MEASURED",
-  "INSUFFICIENT_TRACKING_SAMPLES",
-  "MISSING_CLIPS"
+const PRE_RESULT_WARNING_CODES = new Set([
+  "TRACKING_TIMEOUT",
+  "TRACKING_PARTIAL_TIMEOUT",
+  "RETRY_ENQUEUE_FAILED",
+  "WORKER_RESTARTED"
 ]);
+
+const PRE_RESULT_WARNING_MESSAGES = new Set(
+  [...PRE_RESULT_WARNING_CODES]
+    .map((code) => WARNING_LABELS[code])
+    .filter((message): message is string => Boolean(message))
+);
 
 const metric = (value: number | null) =>
   value === null ? "—" : String(Math.round(value));
@@ -92,6 +93,9 @@ const parseWindowProgress = (message: string | null) => {
     : null;
 };
 
+const isOperationalWarning = (warning: string) =>
+  PRE_RESULT_WARNING_CODES.has(warning) || PRE_RESULT_WARNING_MESSAGES.has(warning);
+
 export function JobProgressPanel({ job }: { job: AnalysisJob }) {
   const [now, setNow] = useState<number | null>(null);
 
@@ -109,7 +113,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
   const isTerminal = ["COMPLETED", "PARTIAL", "FAILED"].includes(job.status);
   const visibleWarnings = isTerminal
     ? job.warnings
-    : job.warnings.filter((warning) => !RESULT_ONLY_WARNINGS.has(warning));
+    : job.warnings.filter(isOperationalWarning);
   const trackingPhase =
     job.progress.phase === "TRACKING" ||
     Boolean(job.progress.step?.toUpperCase().includes("TRACK"));
