@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  confirmTarget,
+  confirmSelections,
   createJob,
   enqueueJob,
   getFrames,
@@ -13,23 +13,24 @@ import {
   type AnalysisJob,
   type CreateJobInput,
   type PreviewFrame,
-  type PreviewTrack,
   WorkflowApiError
 } from "@/lib/workflow-api";
 import {
   savePlayerProfile,
   type PlayerProfileInput
 } from "@/lib/player-profile-api";
+import {
+  MAX_PLAYER_SELECTIONS,
+  togglePlayerSelection,
+  type PlayerSelection
+} from "@/lib/player-selections";
 import { retryJob } from "@/lib/retry-job";
 
 const STORAGE_KEY = "algonext.current-job.v2";
 const TERMINAL_STATUSES = new Set(["COMPLETED", "PARTIAL", "FAILED"]);
 const ACTIVE_ANALYSIS_STATUSES = new Set(["QUEUED", "RUNNING", "PROCESSING"]);
 
-export type PlayerSelection = {
-  frame: PreviewFrame;
-  track: PreviewTrack;
-};
+export type { PlayerSelection } from "@/lib/player-selections";
 
 export type WorkflowStage =
   | "create"
@@ -103,12 +104,13 @@ export function useAnalysisWorkflow() {
   const [job, setJob] = useState<AnalysisJob | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [frames, setFrames] = useState<PreviewFrame[]>([]);
-  const [selection, setSelection] = useState<PlayerSelection | null>(null);
+  const [selections, setSelections] = useState<PlayerSelection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const pollGeneration = useRef(0);
   const bootstrapped = useRef(false);
+  const selection = selections[0] ?? null;
 
   const persistJobId = useCallback((nextJobId: string | null) => {
     if (typeof window === "undefined") return;
@@ -218,7 +220,7 @@ export function useAnalysisWorkflow() {
     async (input: CreateJobInput) => {
       setBusyAction("create");
       setError(null);
-      setSelection(null);
+      setSelections([]);
       setFrames([]);
       try {
         const created = await createJob(input);
@@ -235,16 +237,29 @@ export function useAnalysisWorkflow() {
     [persistJobId]
   );
 
-  const choosePlayer = useCallback(
-    async (nextSelection: PlayerSelection, profile: PlayerProfileInput) => {
-      if (!jobId) return;
+  const toggleSelection = useCallback((nextSelection: PlayerSelection) => {
+    setSelections((current) => togglePlayerSelection(current, nextSelection));
+  }, []);
+  const setSelection = useCallback((nextSelection: PlayerSelection | null) => {
+    setSelections(nextSelection ? [nextSelection] : []);
+  }, []);
+  const choosePlayerAnchors = useCallback(
+    async (nextSelections: PlayerSelection[], profile: PlayerProfileInput) => {
+      if (
+        !jobId ||
+        nextSelections.length < 1 ||
+        nextSelections.length > MAX_PLAYER_SELECTIONS
+      ) {
+        return;
+      }
+      const primary = nextSelections[0];
       setBusyAction("select-player");
-      setSelection(nextSelection);
+      setSelections([...nextSelections]);
       setError(null);
       try {
-        await pickPlayer(jobId, nextSelection.frame.key, nextSelection.track.trackId);
+        await pickPlayer(jobId, primary.frame.key, primary.track.trackId);
         await savePlayerProfile(jobId, profile);
-        await confirmTarget(jobId, nextSelection);
+        await confirmSelections(jobId, nextSelections);
         await refresh(jobId, { silent: true });
       } catch (selectionError) {
         setError(formatError(selectionError));
@@ -253,6 +268,11 @@ export function useAnalysisWorkflow() {
       }
     },
     [jobId, refresh]
+  );
+  const choosePlayer = useCallback(
+    async (nextSelection: PlayerSelection, profile: PlayerProfileInput) =>
+      choosePlayerAnchors([nextSelection], profile),
+    [choosePlayerAnchors]
   );
 
   const enqueue = useCallback(async () => {
@@ -289,7 +309,7 @@ export function useAnalysisWorkflow() {
     setJob(null);
     setJobId(null);
     setFrames([]);
-    setSelection(null);
+    setSelections([]);
     setError(null);
     setBusyAction(null);
     persistJobId(null);
@@ -303,6 +323,7 @@ export function useAnalysisWorkflow() {
     jobId,
     frames,
     selection,
+    selections,
     stage,
     error,
     busyAction,
@@ -312,9 +333,12 @@ export function useAnalysisWorkflow() {
     resume,
     refresh,
     choosePlayer,
+    choosePlayerAnchors,
     enqueue,
     retry,
     reset,
-    setSelection
+    setSelection,
+    setSelections,
+    toggleSelection
   };
 }
