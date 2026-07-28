@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run test:player-selections && npm run test:analysis-outcome && next build",
     "start": "next start",
     "lint": "next lint",
-    "test:player-selections": "node -e \"require('fs').rmSync('.tmp-player-selection-tests',{recursive:true,force:true})\" && tsc lib/player-selections.ts tests/player-selections.test.ts --outDir .tmp-player-selection-tests --module commonjs --target es2020 --moduleResolution node --strict --skipLibCheck && node .tmp-player-selection-tests/tests/player-selections.test.js && node -e \"require('fs').rmSync('.tmp-player-selection-tests',{recursive:true,force:true})\""
+    "test:player-selections": "node -e \"require('fs').rmSync('.tmp-player-selection-tests',{recursive:true,force:true})\" && tsc lib/player-selections.ts tests/player-selections.test.ts --outDir .tmp-player-selection-tests --module commonjs --target es2020 --moduleResolution node --strict --skipLibCheck && node .tmp-player-selection-tests/tests/player-selections.test.js && node -e \"require('fs').rmSync('.tmp-player-selection-tests',{recursive:true,force:true})\"",
+    "test:analysis-outcome": "node -e \"require('fs').rmSync('.tmp-analysis-outcome-tests',{recursive:true,force:true})\" && tsc lib/analysis-outcome.ts lib/reselection-recovery.ts tests/analysis-outcome.test.ts --outDir .tmp-analysis-outcome-tests --module commonjs --target es2020 --moduleResolution node --strict --skipLibCheck && node .tmp-analysis-outcome-tests/tests/analysis-outcome.test.js && node -e \"require('fs').rmSync('.tmp-analysis-outcome-tests',{recursive:true,force:true})\""
   },
   "dependencies": {
     "next": "15.5.21",
