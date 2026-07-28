@@ -8,6 +8,7 @@ import {
   enqueueJob,
   getFrames,
   getJob,
+  getTargetAnalysisAttemptId,
   isFramesNotReadyError,
   pickPlayer,
   type AnalysisJob,
@@ -25,6 +26,7 @@ import {
   type PlayerSelection
 } from "@/lib/player-selections";
 import { transitionReselectionRecovery } from "@/lib/reselection-recovery";
+import { mayCommitRefresh } from "@/lib/refresh-commit-guard";
 import { retryJob } from "@/lib/retry-job";
 
 const STORAGE_KEY = "algonext.current-job.v2";
@@ -89,7 +91,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   RETRY_NOT_READY:
     "Il job non conserva una selezione completa del giocatore e non può essere riavviato in sicurezza.",
   RETRY_ENQUEUE_FAILED:
-    "Il worker è disponibile, ma il nuovo tentativo non è entrato nella coda."
+    "Il worker è disponibile, ma il nuovo tentativo non è entrato nella coda.",
+  ANALYSIS_ATTEMPT_PRECONDITION_REQUIRED:
+    "Il job è avanzato. Ricarica lo stato corrente prima di riprovare.",
+  ANALYSIS_ATTEMPT_MISMATCH:
+    "Il job è già avanzato a un altro tentativo. Lo stato è stato ricaricato in sicurezza."
 };
 
 const formatError = (error: unknown) => {
@@ -108,10 +114,24 @@ export function useAnalysisWorkflow() {
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const pollGeneration = useRef(0);
+  const workflowEpoch = useRef(0);
+  const refreshSequence = useRef(0);
+  const [epochVersion, setEpochVersion] = useState(0);
   const bootstrapped = useRef(false);
   const reselectionClearedJobId = useRef<string | null>(null);
   const selection = selections[0] ?? null;
+
+  const beginTransition = useCallback(() => {
+    workflowEpoch.current += 1;
+    refreshSequence.current += 1;
+    setEpochVersion(workflowEpoch.current);
+    return workflowEpoch.current;
+  }, []);
+
+  const isCurrentEpoch = useCallback(
+    (expectedEpoch: number) => expectedEpoch === workflowEpoch.current,
+    []
+  );
 
   const persistJobId = useCallback((nextJobId: string | null) => {
     if (typeof window === "undefined") return;
@@ -130,11 +150,26 @@ export function useAnalysisWorkflow() {
   }, []);
 
   const refresh = useCallback(
-    async (id = jobId, options?: { silent?: boolean }) => {
+    async (
+      id = jobId,
+      options?: { silent?: boolean; expectedEpoch?: number }
+    ) => {
       if (!id) return null;
+      const token = {
+        epoch: options?.expectedEpoch ?? workflowEpoch.current,
+        sequence: ++refreshSequence.current
+      };
+      const canCommit = () =>
+        mayCommitRefresh(
+          token,
+          workflowEpoch.current,
+          refreshSequence.current
+        );
+      if (!canCommit()) return null;
       if (!options?.silent) setBusyAction("refresh");
       try {
         const nextJob = await getJob(id);
+        if (!canCommit()) return null;
         setJob(nextJob);
         setJobId(nextJob.id);
         persistJobId(nextJob.id);
@@ -151,40 +186,69 @@ export function useAnalysisWorkflow() {
 
         if (nextJob.previewFrames.length === 0 && !TERMINAL_STATUSES.has(nextJob.status)) {
           const fallback = await loadFrames(nextJob.id, []);
+          if (!canCommit()) return null;
           if (fallback.length > 0) {
             setFrames((existing) => mergeFrames(existing, fallback));
           }
         }
-        return nextJob;
+        return canCommit() ? nextJob : null;
       } catch (refreshError) {
+        if (!canCommit()) return null;
         setError(formatError(refreshError));
         throw refreshError;
       } finally {
-        if (!options?.silent) setBusyAction(null);
+        if (!options?.silent && canCommit()) setBusyAction(null);
       }
     },
     [jobId, loadFrames, persistJobId]
+  );
+
+  const reconcileMutationError = useCallback(
+    async (mutationError: unknown, id: string, expectedEpoch: number) => {
+      if (!isCurrentEpoch(expectedEpoch)) return;
+      if (
+        mutationError instanceof WorkflowApiError &&
+        (mutationError.code === "ANALYSIS_ATTEMPT_MISMATCH" ||
+          mutationError.code ===
+            "ANALYSIS_ATTEMPT_PRECONDITION_REQUIRED")
+      ) {
+        try {
+          await refresh(id, { silent: true, expectedEpoch });
+        } catch {
+          // The guarded refresh already exposes its own transport error.
+        }
+      }
+      if (isCurrentEpoch(expectedEpoch)) {
+        setError(formatError(mutationError));
+      }
+    },
+    [isCurrentEpoch, refresh]
   );
 
   const resume = useCallback(
     async (id: string) => {
       const normalized = id.trim();
       if (!normalized) return;
+      const epoch = beginTransition();
       setBusyAction("resume");
       setError(null);
       setJobId(normalized);
       persistJobId(normalized);
       try {
-        await refresh(normalized, { silent: true });
+        await refresh(normalized, { silent: true, expectedEpoch: epoch });
       } catch {
-        setJobId(null);
-        persistJobId(null);
+        if (isCurrentEpoch(epoch)) {
+          setJobId(null);
+          persistJobId(null);
+        }
       } finally {
-        setBusyAction(null);
-        setIsBootstrapping(false);
+        if (isCurrentEpoch(epoch)) {
+          setBusyAction(null);
+          setIsBootstrapping(false);
+        }
       }
     },
-    [persistJobId, refresh]
+    [beginTransition, isCurrentEpoch, persistJobId, refresh]
   );
 
   useEffect(() => {
@@ -199,20 +263,30 @@ export function useAnalysisWorkflow() {
   }, [resume]);
 
   useEffect(() => {
-    if (!jobId || !job || TERMINAL_STATUSES.has(job.status)) return;
-    const generation = ++pollGeneration.current;
+    if (
+      busyAction ||
+      !jobId ||
+      !job ||
+      TERMINAL_STATUSES.has(job.status)
+    ) {
+      return;
+    }
+    const generation = workflowEpoch.current;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
 
     const poll = async () => {
       try {
-        const nextJob = await refresh(jobId, { silent: true });
-        if (stopped || generation !== pollGeneration.current || !nextJob) return;
+        const nextJob = await refresh(jobId, {
+          silent: true,
+          expectedEpoch: generation
+        });
+        if (stopped || !isCurrentEpoch(generation) || !nextJob) return;
         if (!TERMINAL_STATUSES.has(nextJob.status)) {
           timeout = setTimeout(poll, getPollingDelay(nextJob));
         }
       } catch {
-        if (!stopped && generation === pollGeneration.current) {
+        if (!stopped && isCurrentEpoch(generation)) {
           timeout = setTimeout(poll, 8_000);
         }
       }
@@ -223,10 +297,11 @@ export function useAnalysisWorkflow() {
       stopped = true;
       if (timeout) clearTimeout(timeout);
     };
-  }, [job, jobId, refresh]);
+  }, [busyAction, epochVersion, isCurrentEpoch, job, jobId, refresh]);
 
   const start = useCallback(
     async (input: CreateJobInput) => {
+      const epoch = beginTransition();
       setBusyAction("create");
       setError(null);
       reselectionClearedJobId.current = null;
@@ -234,25 +309,35 @@ export function useAnalysisWorkflow() {
       setFrames([]);
       try {
         const created = await createJob(input);
+        if (!isCurrentEpoch(epoch)) return;
         setJob(created);
         setJobId(created.id);
         setFrames(created.previewFrames);
         persistJobId(created.id);
       } catch (createError) {
-        setError(formatError(createError));
+        if (isCurrentEpoch(epoch)) setError(formatError(createError));
       } finally {
-        setBusyAction(null);
+        if (isCurrentEpoch(epoch)) setBusyAction(null);
       }
     },
-    [persistJobId]
+    [beginTransition, isCurrentEpoch, persistJobId]
   );
 
   const toggleSelection = useCallback((nextSelection: PlayerSelection) => {
+    beginTransition();
     setSelections((current) => togglePlayerSelection(current, nextSelection));
-  }, []);
+  }, [beginTransition]);
   const setSelection = useCallback((nextSelection: PlayerSelection | null) => {
+    beginTransition();
     setSelections(nextSelection ? [nextSelection] : []);
-  }, []);
+  }, [beginTransition]);
+  const replaceSelections = useCallback(
+    (nextSelections: PlayerSelection[]) => {
+      beginTransition();
+      setSelections(nextSelections);
+    },
+    [beginTransition]
+  );
   const choosePlayerAnchors = useCallback(
     async (nextSelections: PlayerSelection[], profile: PlayerProfileInput) => {
       if (
@@ -262,22 +347,39 @@ export function useAnalysisWorkflow() {
       ) {
         return;
       }
+      const epoch = beginTransition();
+      const expectedAnalysisAttemptId = getTargetAnalysisAttemptId(job?.target);
       const primary = nextSelections[0];
       setBusyAction("select-player");
       setSelections([...nextSelections]);
       setError(null);
       try {
-        await pickPlayer(jobId, primary.frame.key, primary.track.trackId);
-        await savePlayerProfile(jobId, profile);
-        await confirmSelections(jobId, nextSelections);
-        await refresh(jobId, { silent: true });
+        const selectedAttemptId = await pickPlayer(
+          jobId,
+          primary.frame.key,
+          primary.track.trackId,
+          expectedAnalysisAttemptId
+        );
+        if (!isCurrentEpoch(epoch)) return;
+        await savePlayerProfile(jobId, profile, selectedAttemptId);
+        if (!isCurrentEpoch(epoch)) return;
+        await confirmSelections(jobId, nextSelections, selectedAttemptId);
+        if (!isCurrentEpoch(epoch)) return;
+        await refresh(jobId, { silent: true, expectedEpoch: epoch });
       } catch (selectionError) {
-        setError(formatError(selectionError));
+        await reconcileMutationError(selectionError, jobId, epoch);
       } finally {
-        setBusyAction(null);
+        if (isCurrentEpoch(epoch)) setBusyAction(null);
       }
     },
-    [jobId, refresh]
+    [
+      beginTransition,
+      isCurrentEpoch,
+      job,
+      jobId,
+      reconcileMutationError,
+      refresh
+    ]
   );
   const choosePlayer = useCallback(
     async (nextSelection: PlayerSelection, profile: PlayerProfileInput) =>
@@ -287,35 +389,58 @@ export function useAnalysisWorkflow() {
 
   const enqueue = useCallback(async () => {
     if (!jobId) return;
+    const epoch = beginTransition();
+    const expectedAnalysisAttemptId = getTargetAnalysisAttemptId(job?.target);
     setBusyAction("enqueue");
     setError(null);
     try {
-      await enqueueJob(jobId);
-      await refresh(jobId, { silent: true });
+      await enqueueJob(jobId, expectedAnalysisAttemptId);
+      if (!isCurrentEpoch(epoch)) return;
+      await refresh(jobId, { silent: true, expectedEpoch: epoch });
     } catch (enqueueError) {
-      setError(formatError(enqueueError));
+      await reconcileMutationError(enqueueError, jobId, epoch);
     } finally {
-      setBusyAction(null);
+      if (isCurrentEpoch(epoch)) setBusyAction(null);
     }
-  }, [jobId, refresh]);
+  }, [
+    beginTransition,
+    isCurrentEpoch,
+    job,
+    jobId,
+    reconcileMutationError,
+    refresh
+  ]);
 
-  const retry = useCallback(async () => {
-    if (!jobId) return;
-    setBusyAction("retry");
-    setError(null);
-    pollGeneration.current += 1;
-    try {
-      await retryJob(jobId);
-      await refresh(jobId, { silent: true });
-    } catch (retryError) {
-      setError(formatError(retryError));
-    } finally {
-      setBusyAction(null);
-    }
-  }, [jobId, refresh]);
+  const retry = useCallback(
+    async (
+      force = false,
+      expectedAnalysisAttemptId: string | null = null
+    ) => {
+      if (!jobId) return;
+      const epoch = beginTransition();
+      setBusyAction("retry");
+      setError(null);
+      try {
+        await retryJob(jobId, { force, expectedAnalysisAttemptId });
+        if (!isCurrentEpoch(epoch)) return;
+        await refresh(jobId, { silent: true, expectedEpoch: epoch });
+      } catch (retryError) {
+        await reconcileMutationError(retryError, jobId, epoch);
+      } finally {
+        if (isCurrentEpoch(epoch)) setBusyAction(null);
+      }
+    },
+    [
+      beginTransition,
+      isCurrentEpoch,
+      jobId,
+      reconcileMutationError,
+      refresh
+    ]
+  );
 
   const reset = useCallback(() => {
-    pollGeneration.current += 1;
+    beginTransition();
     setJob(null);
     setJobId(null);
     setFrames([]);
@@ -324,7 +449,7 @@ export function useAnalysisWorkflow() {
     setError(null);
     setBusyAction(null);
     persistJobId(null);
-  }, [persistJobId]);
+  }, [beginTransition, persistJobId]);
 
   const stage = useMemo(() => getWorkflowStage(job, frames), [frames, job]);
   const isBusy = busyAction !== null;
@@ -349,7 +474,7 @@ export function useAnalysisWorkflow() {
     retry,
     reset,
     setSelection,
-    setSelections,
+    setSelections: replaceSelections,
     toggleSelection
   };
 }

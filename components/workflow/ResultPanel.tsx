@@ -1,7 +1,13 @@
-import type { AnalysisJob, JobClip, JsonRecord } from "@/lib/workflow-api";
+import {
+  getTargetAnalysisAttemptId,
+  type AnalysisJob,
+  type JobClip,
+  type JsonRecord
+} from "@/lib/workflow-api";
 import {
   deriveAnalysisOutcome,
-  type AnalysisOutcome
+  type AnalysisOutcome,
+  type TrackingFailureKind
 } from "@/lib/analysis-outcome";
 
 const formatScore = (value: number | null, scale = 100) => {
@@ -74,6 +80,37 @@ const CAPABILITY_LABELS: Record<string, string> = {
   technical_tactical_scoring: "Valutazione tecnico-tattica"
 };
 
+const TRACKING_FAILURE_COPY: Record<
+  TrackingFailureKind,
+  { title: string; detail: string }
+> = {
+  technical: {
+    title: "Tracking interrotto da un errore tecnico",
+    detail:
+      "La pipeline non ha completato il tracking per un errore operativo. La selezione del giocatore resta valida e il tentativo può essere ripetuto."
+  },
+  anchor_rejected: {
+    title: "Riferimenti trovati, ma identità rifiutata",
+    detail:
+      "Il controllo d’identità ha rifiutato le tracce perché non erano coerenti con i riferimenti manuali. Nessuna metrica o valutazione è stata attribuita al giocatore."
+  },
+  autonomous_unproven: {
+    title: "Riferimenti trovati, tracking tra finestre non provato",
+    detail:
+      "Le ancore manuali sono state trovate, ma nessun collegamento autonomo tra finestre ha superato i controlli. Il tentativo è terminato senza produrre un voto."
+  },
+  anchor_missing: {
+    title: "Il giocatore selezionato non è stato ritrovato",
+    detail:
+      "La pipeline ha terminato il tentativo senza osservazioni affidabili del giocatore. Per questo non vengono mostrati indice, continuità, campioni o valutazioni ereditati dalla preview."
+  },
+  unknown: {
+    title: "Tracking del giocatore non riuscito",
+    detail:
+      "Il tentativo è terminato senza evidenza sufficiente per attribuire metriche o valutazioni al giocatore."
+  }
+};
+
 function ClipsPanel({ clips }: { clips: JobClip[] }) {
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
@@ -105,10 +142,14 @@ function ClipsPanel({ clips }: { clips: JobClip[] }) {
 
 function TrackingFailurePanel({
   job,
-  outcome
+  outcome,
+  onRetry,
+  retrying = false
 }: {
   job: AnalysisJob;
   outcome: AnalysisOutcome;
+  onRetry?: (expectedAnalysisAttemptId: string) => void | Promise<void>;
+  retrying?: boolean;
 }) {
   const count = (value: number | null) => (value === null ? "—" : String(value));
   const windowCount =
@@ -119,6 +160,15 @@ function TrackingFailurePanel({
     outcome.anchorsTotal === null
       ? "—"
       : `${count(outcome.anchorsMatched)} / ${outcome.anchorsTotal}`;
+  const failureCopy =
+    TRACKING_FAILURE_COPY[outcome.trackingFailureKind ?? "unknown"];
+  const currentAnalysisAttemptId = getTargetAnalysisAttemptId(job.target);
+  const canRetry =
+    outcome.actionRequired === "RETRY_ANALYSIS" &&
+    job.playerSaved &&
+    job.targetSaved &&
+    currentAnalysisAttemptId !== null &&
+    Boolean(onRetry);
 
   return (
     <section className="space-y-5">
@@ -127,12 +177,10 @@ function TrackingFailurePanel({
           Tracking non riuscito
         </p>
         <h2 className="mt-2 text-2xl font-bold text-white">
-          Il giocatore selezionato non è stato ritrovato
+          {failureCopy.title}
         </h2>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-rose-50/80">
-          La pipeline ha terminato il tentativo senza osservazioni affidabili del
-          giocatore. Per questo non vengono mostrati indice, continuità, campioni o
-          valutazioni ereditati dalla preview.
+          {failureCopy.detail}
         </p>
       </div>
 
@@ -161,10 +209,26 @@ function TrackingFailurePanel({
           </div>
         </dl>
         <p className="mt-4 text-sm leading-6 text-slate-300">
-          {job.status === "WAITING_FOR_PLAYER"
+          {canRetry
+            ? "Riprova l’analisi senza cambiare i riferimenti del giocatore."
+            : job.status === "WAITING_FOR_PLAYER"
             ? "Seleziona un frame in cui il giocatore sia più grande, nitido e non occluso; puoi aggiungere fino a cinque riferimenti distribuiti nel video."
             : "Questo tentativo è terminato e non dispone di un selettore recuperabile. Avvia un nuovo job sullo stesso video e scegli fino a cinque riferimenti più nitidi e distribuiti nel filmato."}
         </p>
+        {canRetry ? (
+          <button
+            type="button"
+            onClick={() =>
+              currentAnalysisAttemptId
+                ? void onRetry?.(currentAnalysisAttemptId)
+                : undefined
+            }
+            disabled={retrying}
+            className="mt-4 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-slate-100 disabled:opacity-50"
+          >
+            {retrying ? "Riavvio…" : "Riprova analisi"}
+          </button>
+        ) : null}
         {outcome.reasonCodes.length > 0 ? (
           <p className="mt-4 break-words font-mono text-[10px] leading-5 text-slate-600">
             {outcome.reasonCodes.join(" · ")}
@@ -172,7 +236,9 @@ function TrackingFailurePanel({
         ) : null}
       </div>
 
-      <ClipsPanel clips={job.clips} />
+      {outcome.analysisAttemptMismatch ? null : (
+        <ClipsPanel clips={job.clips} />
+      )}
     </section>
   );
 }
@@ -197,6 +263,7 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
     ...asStringArray(trackingQuality.limitations)
   ].filter((value, index, values) => values.indexOf(value) === index);
   const reasonCodes = [
+    ...outcome.reasonCodes,
     ...asStringArray(raw.reason_codes),
     ...asStringArray(trackingQuality.reason_codes)
   ].filter((value, index, values) => values.indexOf(value) === index);
@@ -253,6 +320,19 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
           I vecchi punteggi euristici non vengono più mostrati.
         </p>
       </div>
+
+      {outcome.trackingStatus === "SPARSE_CROSS_WINDOW_EVIDENCE" ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">
+            Evidenza tra finestre molto limitata
+          </p>
+          <p className="mt-2 max-w-4xl text-sm leading-6 text-amber-50/80">
+            È stato verificato almeno un collegamento autonomo del giocatore, ma
+            la copertura resta inferiore al 5% del video. Le metriche mostrate
+            sono diagnostiche parziali, non una valutazione completa.
+          </p>
+        </div>
+      ) : null}
 
       {signalEntries.length > 0 ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
@@ -426,7 +506,17 @@ function ValidatedPlayerEvaluationPanel({ job, preliminary }: { job: AnalysisJob
   );
 }
 
-export function ResultPanel({ job, preliminary = false }: { job: AnalysisJob; preliminary?: boolean }) {
+export function ResultPanel({
+  job,
+  preliminary = false,
+  onRetry,
+  retrying = false
+}: {
+  job: AnalysisJob;
+  preliminary?: boolean;
+  onRetry?: (expectedAnalysisAttemptId: string) => void | Promise<void>;
+  retrying?: boolean;
+}) {
   const result = job.result;
   if (!result) {
     return (
@@ -441,18 +531,39 @@ export function ResultPanel({ job, preliminary = false }: { job: AnalysisJob; pr
 
   const provenance = asRecord(result.raw.score_provenance);
   const outcome = deriveAnalysisOutcome(job);
+  const trustedClips = outcome.analysisAttemptMismatch
+    ? []
+    : job.clips.filter((clip) =>
+        outcome.analysisAttemptId === null
+          ? clip.analysisAttemptId === null
+          : clip.analysisAttemptId === outcome.analysisAttemptId
+      );
+  const trustedJob =
+    trustedClips.length === job.clips.length
+      ? job
+      : { ...job, clips: trustedClips };
   const validatedPlayerEvaluation =
     result.raw.player_evaluation_available === true &&
     provenance.kind === "player_evaluation" &&
     provenance.validated_player_score === true;
 
   if (outcome.trackingState === "failed") {
-    return <TrackingFailurePanel job={job} outcome={outcome} />;
+    return (
+      <TrackingFailurePanel
+        job={trustedJob}
+        outcome={outcome}
+        onRetry={onRetry}
+        retrying={retrying}
+      />
+    );
   }
 
   return validatedPlayerEvaluation ? (
-    <ValidatedPlayerEvaluationPanel job={job} preliminary={preliminary} />
+    <ValidatedPlayerEvaluationPanel
+      job={trustedJob}
+      preliminary={preliminary}
+    />
   ) : (
-    <TrackingOnlyPanel job={job} preliminary={preliminary} />
+    <TrackingOnlyPanel job={trustedJob} preliminary={preliminary} />
   );
 }

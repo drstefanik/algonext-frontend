@@ -7,6 +7,7 @@ import { JobCreateForm } from "@/components/workflow/JobCreateForm";
 import { JobProgressPanel } from "@/components/workflow/JobProgressPanel";
 import { PlayerPicker } from "@/components/workflow/PlayerPicker";
 import { ResultPanel } from "@/components/workflow/ResultPanel";
+import { getTargetAnalysisAttemptId } from "@/lib/workflow-api";
 
 const STEPS: Array<{ key: WorkflowStage[]; label: string }> = [
   { key: ["create"], label: "Video" },
@@ -24,6 +25,10 @@ export default function JobRunner() {
   const workflow = useAnalysisWorkflow();
   const [resumeId, setResumeId] = useState("");
   const activeStep = useMemo(() => getActiveStep(workflow.stage), [workflow.stage]);
+  const currentAnalysisAttemptId = useMemo(
+    () => getTargetAnalysisAttemptId(workflow.job?.target),
+    [workflow.job]
+  );
 
   const submitResume = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -205,7 +210,16 @@ export default function JobRunner() {
               {workflow.busyAction === "enqueue" ? "Avvio…" : "Avvia analisi completa"}
             </button>
           </section>
-          {workflow.job.result ? <ResultPanel job={workflow.job} preliminary /> : null}
+          {workflow.job.result ? (
+            <ResultPanel
+              job={workflow.job}
+              preliminary
+              onRetry={(expectedAnalysisAttemptId) =>
+                workflow.retry(true, expectedAnalysisAttemptId)
+              }
+              retrying={workflow.busyAction === "retry"}
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -226,7 +240,13 @@ export default function JobRunner() {
       {workflow.job && workflow.stage === "result" ? (
         <div className="space-y-5">
           <JobProgressPanel job={workflow.job} />
-          <ResultPanel job={workflow.job} />
+          <ResultPanel
+            job={workflow.job}
+            onRetry={(expectedAnalysisAttemptId) =>
+              workflow.retry(true, expectedAnalysisAttemptId)
+            }
+            retrying={workflow.busyAction === "retry"}
+          />
         </div>
       ) : null}
 
@@ -254,7 +274,9 @@ export default function JobRunner() {
               {workflow.job.playerSaved && workflow.job.targetSaved ? (
                 <button
                   type="button"
-                  onClick={() => void workflow.retry()}
+                  onClick={() =>
+                    void workflow.retry(false, currentAnalysisAttemptId)
+                  }
                   disabled={workflow.busyAction === "retry"}
                   className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-slate-100 disabled:opacity-50"
                 >

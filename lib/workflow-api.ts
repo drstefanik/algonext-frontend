@@ -3,6 +3,12 @@ import {
   toSelectionApiPayload,
   type PlayerSelection
 } from "@/lib/player-selections";
+import {
+  analysisAttemptHeaders,
+  getResponseAnalysisAttemptId
+} from "@/lib/analysis-attempt-client";
+
+export { getTargetAnalysisAttemptId } from "@/lib/analysis-attempt-client";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -35,6 +41,8 @@ export type JobProgress = {
   pct: number;
   message: string | null;
   updatedAt: string | null;
+  analysisAttemptId: string | null;
+  analysisAttemptIds: string[];
   stats: {
     framesTotal: number | null;
     framesUsed: number | null;
@@ -50,6 +58,7 @@ export type JobClip = {
   url: string;
   startSec: number | null;
   endSec: number | null;
+  analysisAttemptId: string | null;
 };
 
 export type JobResult = {
@@ -145,6 +154,13 @@ const asString = (value: unknown): string | null => {
   return normalized || null;
 };
 
+const normalizedAttemptIds = (...values: unknown[]): string[] =>
+  values
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .map((value) => asString(value)?.toLowerCase() ?? null)
+    .filter((value): value is string => value !== null)
+    .filter((value, index, all) => all.indexOf(value) === index);
+
 const asNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string" || !value.trim()) return null;
@@ -226,6 +242,10 @@ const normalizeFrame = (value: unknown): PreviewFrame | null => {
 const normalizeProgress = (value: unknown): JobProgress => {
   const source = asRecord(value);
   const stats = asRecord(first(source.stats, source.progress_stats));
+  const analysisAttemptIds = normalizedAttemptIds(
+    source.analysis_attempt_id,
+    source.analysisAttemptId
+  );
   const step = asString(source.step);
   const explicitPhase = asString(first(source.phase, source.progress_phase));
   const normalizedStep = step?.toUpperCase() ?? "";
@@ -249,6 +269,8 @@ const normalizeProgress = (value: unknown): JobProgress => {
     pct: clamp(asNumber(source.pct) ?? 0, 0, 100),
     message: asString(source.message),
     updatedAt: asString(first(source.updated_at, source.updatedAt)),
+    analysisAttemptId: analysisAttemptIds[0] ?? null,
+    analysisAttemptIds,
     stats: {
       framesTotal: asNumber(first(stats.frames_total, stats.framesTotal, source.frames_total)),
       framesUsed: asNumber(
@@ -342,13 +364,19 @@ const normalizeClips = (...values: unknown[]): JobClip[] => {
       if (!url) return null;
       const startSec = asNumber(first(source.start_sec, source.startSec, source.start));
       const endSec = asNumber(first(source.end_sec, source.endSec, source.end));
+      const analysisAttemptIds = normalizedAttemptIds(
+        source.analysis_attempt_id,
+        source.analysisAttemptId
+      );
+      if (analysisAttemptIds.length > 1) return null;
       return {
         label:
           asString(source.label) ??
           (startSec !== null && endSec !== null ? `${startSec}s–${endSec}s` : "Clip"),
         url,
         startSec,
-        endSec
+        endSec,
+        analysisAttemptId: analysisAttemptIds[0] ?? null
       };
     })
     .filter((clip): clip is JobClip => Boolean(clip));
@@ -524,46 +552,68 @@ export const getFrames = async (jobId: string, count = 32): Promise<PreviewFrame
 export const pickPlayer = async (
   jobId: string,
   frameKey: string,
-  trackId: string
-): Promise<void> => {
-  await request(`/jobs/${encodeURIComponent(jobId)}/pick-player`, {
-    method: "POST",
-    body: JSON.stringify({ frame_key: frameKey, track_id: trackId })
-  });
+  trackId: string,
+  expectedAnalysisAttemptId?: string | null
+): Promise<string | null> => {
+  const payload = await request<JsonRecord>(
+    `/jobs/${encodeURIComponent(jobId)}/pick-player`,
+    {
+      method: "POST",
+      headers: analysisAttemptHeaders(expectedAnalysisAttemptId),
+      body: JSON.stringify({ frame_key: frameKey, track_id: trackId })
+    }
+  );
+  return getResponseAnalysisAttemptId(payload);
 };
 
 export const confirmSelections = async (
   jobId: string,
-  selections: readonly PlayerSelection[]
-): Promise<void> => {
+  selections: readonly PlayerSelection[],
+  expectedAnalysisAttemptId?: string | null
+): Promise<string | null> => {
   if (selections.length < 1 || selections.length > MAX_PLAYER_SELECTIONS) {
     throw new Error(`Seleziona da 1 a ${MAX_PLAYER_SELECTIONS} riferimenti dello stesso giocatore.`);
   }
-  await request(`/jobs/${encodeURIComponent(jobId)}/selection`, {
-    method: "POST",
-    body: JSON.stringify({ selections: selections.map(toSelectionApiPayload) })
-  });
+  const payload = await request<JsonRecord>(
+    `/jobs/${encodeURIComponent(jobId)}/selection`,
+    {
+      method: "POST",
+      headers: analysisAttemptHeaders(expectedAnalysisAttemptId),
+      body: JSON.stringify({ selections: selections.map(toSelectionApiPayload) })
+    }
+  );
+  return getResponseAnalysisAttemptId(payload);
 };
 
 export const confirmTarget = async (
   jobId: string,
-  selection: { frame: PreviewFrame; track: PreviewTrack; force?: boolean }
-): Promise<void> => {
-  await request(`/jobs/${encodeURIComponent(jobId)}/target`, {
-    method: "POST",
-    body: JSON.stringify({
-      frame_key: selection.frame.key,
-      time_sec: selection.frame.timeSec,
-      track_id: selection.track.trackId,
-      bbox: selection.track.bbox,
-      force: Boolean(selection.force)
-    })
-  });
+  selection: { frame: PreviewFrame; track: PreviewTrack; force?: boolean },
+  expectedAnalysisAttemptId?: string | null
+): Promise<string | null> => {
+  const payload = await request<JsonRecord>(
+    `/jobs/${encodeURIComponent(jobId)}/target`,
+    {
+      method: "POST",
+      headers: analysisAttemptHeaders(expectedAnalysisAttemptId),
+      body: JSON.stringify({
+        frame_key: selection.frame.key,
+        time_sec: selection.frame.timeSec,
+        track_id: selection.track.trackId,
+        bbox: selection.track.bbox,
+        force: Boolean(selection.force)
+      })
+    }
+  );
+  return getResponseAnalysisAttemptId(payload);
 };
 
-export const enqueueJob = async (jobId: string): Promise<void> => {
+export const enqueueJob = async (
+  jobId: string,
+  expectedAnalysisAttemptId?: string | null
+): Promise<void> => {
   await request(`/jobs/${encodeURIComponent(jobId)}/enqueue`, {
     method: "POST",
+    headers: analysisAttemptHeaders(expectedAnalysisAttemptId),
     body: "{}"
   });
 };

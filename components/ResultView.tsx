@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { getTargetAnalysisAttemptId } from "@/lib/analysis-attempt-client";
 import { resolveJobId, type JobResponse } from "@/lib/api";
 import { extractWarnings } from "@/lib/warnings";
 
@@ -154,6 +155,7 @@ export default function ResultView({ job }: { job: JobResponse }) {
   >("idle");
   const [aiReportError, setAiReportError] = useState<string | null>(null);
   const jobId = resolveJobId(job);
+  const analysisAttemptId = getTargetAnalysisAttemptId(job.target);
 
   const handleFetchAiReport = async (force = false) => {
     if (!jobId) {
@@ -166,7 +168,12 @@ export default function ResultView({ job }: { job: JobResponse }) {
     try {
       const response = await fetch(
         `/api/jobs/${encodeURIComponent(jobId)}/ai-report${force ? "?force=1" : ""}`,
-        { method: "POST" }
+        {
+          method: "POST",
+          headers: analysisAttemptId
+            ? { "X-Analysis-Attempt-Id": analysisAttemptId }
+            : undefined
+        }
       );
       if (response.status === 409) {
         setAiReportStatus("not-ready");

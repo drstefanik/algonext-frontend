@@ -238,6 +238,13 @@ const jsonHeaders = {
   "Content-Type": "application/json"
 };
 
+const mutationHeaders = (expectedAnalysisAttemptId?: string | null) => ({
+  ...jsonHeaders,
+  ...(expectedAnalysisAttemptId
+    ? { "X-Analysis-Attempt-Id": expectedAnalysisAttemptId }
+    : {})
+});
+
 const DEFAULT_TIMEOUT_MS = 15000;
 
 const coerceNumber = (value: unknown): number | null => {
@@ -1067,10 +1074,13 @@ export async function createJob(payload: CreateJobPayload) {
   return { jobId, status };
 }
 
-export async function enqueueJob(jobId: string) {
+export async function enqueueJob(
+  jobId: string,
+  expectedAnalysisAttemptId?: string | null
+) {
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/enqueue`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: toJsonBody()
   });
@@ -1127,7 +1137,11 @@ export async function getJobFrames(jobId: string, count = TARGET_FRAMES_COUNT) {
   };
 }
 
-export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
+export async function saveJobPlayerRef(
+  jobId: string,
+  payload: FrameSelection,
+  expectedAnalysisAttemptId?: string | null
+) {
   const frameTimeSec = payload.frameTimeSec ?? payload.frame_time_sec ?? payload.t ?? null;
   if (frameTimeSec === null || frameTimeSec === undefined) {
     throw new Error("Missing frame time from preview frame. Check /frames mapping.");
@@ -1143,7 +1157,7 @@ export async function saveJobPlayerRef(jobId: string, payload: FrameSelection) {
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/player-ref`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: JSON.stringify(requestPayload)
   });
@@ -1166,7 +1180,8 @@ export async function saveJobTargetSelection(
     trackId?: string | number | null;
     bbox: { x: number; y: number; w: number; h: number };
     force?: boolean;
-  }
+  },
+  expectedAnalysisAttemptId?: string | null
 ) {
   const { frameKey, timeSec, trackId, bbox } = payload;
   if (frameKey == null && (timeSec === null || timeSec === undefined)) {
@@ -1197,7 +1212,7 @@ export async function saveJobTargetSelection(
   console.info("[target] payload", requestPayload);
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/target`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: JSON.stringify(requestPayload)
   });
@@ -1214,7 +1229,8 @@ export async function saveJobTargetSelection(
 
 export async function pickJobPlayer(
   jobId: string,
-  payload: { frameKey: string; trackId: string }
+  payload: { frameKey: string; trackId: string },
+  expectedAnalysisAttemptId?: string | null
 ) {
   const requestPayload = {
     frame_key: payload.frameKey,
@@ -1222,7 +1238,7 @@ export async function pickJobPlayer(
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/pick-player`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: JSON.stringify(requestPayload)
   });
@@ -1239,7 +1255,8 @@ export async function pickJobPlayer(
 
 export async function analyzeJobPlayer(
   jobId: string,
-  payload: { frameKey: string; trackId: string }
+  payload: { frameKey: string; trackId: string },
+  expectedAnalysisAttemptId?: string | null
 ) {
   const requestPayload = {
     frame_key: payload.frameKey,
@@ -1247,7 +1264,7 @@ export async function analyzeJobPlayer(
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/analyze-player`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: JSON.stringify(requestPayload)
   });
@@ -1280,7 +1297,11 @@ export async function getJobTrackCandidates(
   return normalizeTrackCandidates(payload);
 }
 
-export async function selectJobTrack(jobId: string, candidate: TrackCandidate) {
+export async function selectJobTrack(
+  jobId: string,
+  candidate: TrackCandidate,
+  expectedAnalysisAttemptId?: string | null
+) {
   const frameTimeSec = candidate.frameTimeSec ?? candidate.frame_time_sec ?? candidate.t ?? null;
   const { x, y, w, h } = candidate;
   if (
@@ -1312,7 +1333,7 @@ export async function selectJobTrack(jobId: string, candidate: TrackCandidate) {
   };
   const response = await fetchWithTimeout(`/api/jobs/${jobId}/select-track`, {
     method: "POST",
-    headers: jsonHeaders,
+    headers: mutationHeaders(expectedAnalysisAttemptId),
     cache: "no-store",
     body: JSON.stringify(requestPayload)
   });

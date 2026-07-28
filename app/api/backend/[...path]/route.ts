@@ -9,6 +9,7 @@ const FORWARDED_REQUEST_HEADERS = new Set([
   "accept",
   "content-type",
   "if-none-match",
+  "x-analysis-attempt-id",
   "user-agent"
 ]);
 const FORWARDED_RESPONSE_HEADERS = new Set([

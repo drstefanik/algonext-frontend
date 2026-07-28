@@ -10,7 +10,16 @@ const asRecord = (value: unknown): JsonRecord =>
 const asString = (value: unknown): string | null =>
   typeof value === "string" && value.trim() ? value.trim() : null;
 
-export async function retryJob(jobId: string): Promise<void> {
+export async function retryJob(
+  jobId: string,
+  {
+    force = false,
+    expectedAnalysisAttemptId = null
+  }: {
+    force?: boolean;
+    expectedAnalysisAttemptId?: string | null;
+  } = {}
+): Promise<void> {
   const response = await fetch(
     `/api/backend/jobs/${encodeURIComponent(jobId)}/retry`,
     {
@@ -18,9 +27,17 @@ export async function retryJob(jobId: string): Promise<void> {
       cache: "no-store",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        ...(expectedAnalysisAttemptId
+          ? { "X-Analysis-Attempt-Id": expectedAnalysisAttemptId }
+          : {})
       },
-      body: "{}"
+      body: JSON.stringify({
+        force,
+        ...(expectedAnalysisAttemptId
+          ? { expected_analysis_attempt_id: expectedAnalysisAttemptId }
+          : {})
+      })
     }
   );
   const payload = await response.json().catch(() => ({}));
