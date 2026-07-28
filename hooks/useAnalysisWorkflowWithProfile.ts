@@ -24,12 +24,12 @@ import {
   togglePlayerSelection,
   type PlayerSelection
 } from "@/lib/player-selections";
+import { transitionReselectionRecovery } from "@/lib/reselection-recovery";
 import { retryJob } from "@/lib/retry-job";
 
 const STORAGE_KEY = "algonext.current-job.v2";
 const TERMINAL_STATUSES = new Set(["COMPLETED", "PARTIAL", "FAILED"]);
 const ACTIVE_ANALYSIS_STATUSES = new Set(["QUEUED", "RUNNING", "PROCESSING"]);
-
 export type { PlayerSelection } from "@/lib/player-selections";
 
 export type WorkflowStage =
@@ -110,6 +110,7 @@ export function useAnalysisWorkflow() {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const pollGeneration = useRef(0);
   const bootstrapped = useRef(false);
+  const reselectionClearedJobId = useRef<string | null>(null);
   const selection = selections[0] ?? null;
 
   const persistJobId = useCallback((nextJobId: string | null) => {
@@ -138,6 +139,14 @@ export function useAnalysisWorkflow() {
         setJobId(nextJob.id);
         persistJobId(nextJob.id);
         setFrames((existing) => mergeFrames(nextJob.previewFrames, existing));
+        const recovery = transitionReselectionRecovery(
+          reselectionClearedJobId.current,
+          nextJob
+        );
+        reselectionClearedJobId.current = recovery.clearedJobId;
+        if (recovery.clearSelections) {
+          setSelections([]);
+        }
         setError(null);
 
         if (nextJob.previewFrames.length === 0 && !TERMINAL_STATUSES.has(nextJob.status)) {
@@ -220,6 +229,7 @@ export function useAnalysisWorkflow() {
     async (input: CreateJobInput) => {
       setBusyAction("create");
       setError(null);
+      reselectionClearedJobId.current = null;
       setSelections([]);
       setFrames([]);
       try {
@@ -309,6 +319,7 @@ export function useAnalysisWorkflow() {
     setJob(null);
     setJobId(null);
     setFrames([]);
+    reselectionClearedJobId.current = null;
     setSelections([]);
     setError(null);
     setBusyAction(null);

@@ -1,4 +1,8 @@
 import type { AnalysisJob, JobClip, JsonRecord } from "@/lib/workflow-api";
+import {
+  deriveAnalysisOutcome,
+  type AnalysisOutcome
+} from "@/lib/analysis-outcome";
 
 const formatScore = (value: number | null, scale = 100) => {
   if (value === null) return "—";
@@ -99,17 +103,93 @@ function ClipsPanel({ clips }: { clips: JobClip[] }) {
   );
 }
 
+function TrackingFailurePanel({
+  job,
+  outcome
+}: {
+  job: AnalysisJob;
+  outcome: AnalysisOutcome;
+}) {
+  const count = (value: number | null) => (value === null ? "—" : String(value));
+  const windowCount =
+    outcome.windowsTotal === null
+      ? "—"
+      : `${count(outcome.windowsProcessed)} / ${outcome.windowsTotal}`;
+  const anchorCount =
+    outcome.anchorsTotal === null
+      ? "—"
+      : `${count(outcome.anchorsMatched)} / ${outcome.anchorsTotal}`;
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">
+          Tracking non riuscito
+        </p>
+        <h2 className="mt-2 text-2xl font-bold text-white">
+          Il giocatore selezionato non è stato ritrovato
+        </h2>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-rose-50/80">
+          La pipeline ha terminato il tentativo senza osservazioni affidabili del
+          giocatore. Per questo non vengono mostrati indice, continuità, campioni o
+          valutazioni ereditati dalla preview.
+        </p>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <h3 className="text-lg font-semibold text-white">Esito del tentativo</h3>
+        <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <dt className="text-xs uppercase tracking-[0.14em] text-slate-500">
+              Riferimenti trovati
+            </dt>
+            <dd className="mt-2 text-xl font-bold text-white">{anchorCount}</dd>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <dt className="text-xs uppercase tracking-[0.14em] text-slate-500">
+              Finestre elaborate
+            </dt>
+            <dd className="mt-2 text-xl font-bold text-white">{windowCount}</dd>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <dt className="text-xs uppercase tracking-[0.14em] text-slate-500">
+              Osservazioni giocatore
+            </dt>
+            <dd className="mt-2 text-xl font-bold text-white">
+              {outcome.observedSamples}
+            </dd>
+          </div>
+        </dl>
+        <p className="mt-4 text-sm leading-6 text-slate-300">
+          {job.status === "WAITING_FOR_PLAYER"
+            ? "Seleziona un frame in cui il giocatore sia più grande, nitido e non occluso; puoi aggiungere fino a cinque riferimenti distribuiti nel video."
+            : "Questo tentativo è terminato e non dispone di un selettore recuperabile. Avvia un nuovo job sullo stesso video e scegli fino a cinque riferimenti più nitidi e distribuiti nel filmato."}
+        </p>
+        {outcome.reasonCodes.length > 0 ? (
+          <p className="mt-4 break-words font-mono text-[10px] leading-5 text-slate-600">
+            {outcome.reasonCodes.join(" · ")}
+          </p>
+        ) : null}
+      </div>
+
+      <ClipsPanel clips={job.clips} />
+    </section>
+  );
+}
+
 function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary: boolean }) {
   const result = job.result!;
   const raw = result.raw;
+  const outcome = deriveAnalysisOutcome(job);
   const trackingQuality = asRecord(raw.tracking_quality);
   const summary = asRecord(raw.summary);
   const signals = asRecord(raw.tracking_signals ?? trackingQuality.signals);
   const capabilities = asRecord(raw.capabilities ?? trackingQuality.capabilities);
-  const trackingQualityIndex =
-    asNumber(raw.tracking_quality_index) ??
-    asNumber(summary.tracking_quality_index) ??
-    asNumber(trackingQuality.tracking_quality_index);
+  const trackingQualityIndex = outcome.metricsVisible
+    ? asNumber(raw.tracking_quality_index) ??
+      asNumber(summary.tracking_quality_index) ??
+      asNumber(trackingQuality.tracking_quality_index)
+    : null;
   const confidence =
     asString(trackingQuality.tracking_confidence) ?? asString(raw.tracking_confidence) ?? "low";
   const limitations = [
@@ -123,10 +203,12 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
   const capabilityEntries = Object.entries(capabilities).filter(
     (entry): entry is [string, boolean] => typeof entry[1] === "boolean"
   );
-  const signalEntries = SIGNALS.map((definition) => ({
-    ...definition,
-    value: asNumber(signals[definition.key])
-  })).filter((entry) => entry.value !== null);
+  const signalEntries = outcome.metricsVisible
+    ? SIGNALS.map((definition) => ({
+        ...definition,
+        value: asNumber(signals[definition.key])
+      })).filter((entry) => entry.value !== null)
+    : [];
 
   return (
     <section className="space-y-5">
@@ -358,10 +440,15 @@ export function ResultPanel({ job, preliminary = false }: { job: AnalysisJob; pr
   }
 
   const provenance = asRecord(result.raw.score_provenance);
+  const outcome = deriveAnalysisOutcome(job);
   const validatedPlayerEvaluation =
     result.raw.player_evaluation_available === true &&
     provenance.kind === "player_evaluation" &&
     provenance.validated_player_score === true;
+
+  if (outcome.trackingState === "failed") {
+    return <TrackingFailurePanel job={job} outcome={outcome} />;
+  }
 
   return validatedPlayerEvaluation ? (
     <ValidatedPlayerEvaluationPanel job={job} preliminary={preliminary} />

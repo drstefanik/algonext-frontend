@@ -40,6 +40,8 @@ export type JobProgress = {
     framesUsed: number | null;
     detections: number | null;
     tracklets: number | null;
+    windowsCompleted: number | null;
+    windowsTotal: number | null;
   };
 };
 
@@ -268,6 +270,22 @@ const normalizeProgress = (value: unknown): JobProgress => {
           source.tracklets_count,
           source.totalTracks,
           source.total_tracks
+        )
+      ),
+      windowsCompleted: asNumber(
+        first(
+          stats.windows_completed,
+          stats.windowsCompleted,
+          source.windows_completed,
+          source.windowsCompleted
+        )
+      ),
+      windowsTotal: asNumber(
+        first(
+          stats.windows_total,
+          stats.windowsTotal,
+          source.windows_total,
+          source.windowsTotal
         )
       )
     }

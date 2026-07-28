@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { deriveAnalysisOutcome } from "@/lib/analysis-outcome";
 import type { AnalysisJob } from "@/lib/workflow-api";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -16,8 +17,8 @@ const STATUS_LABELS: Record<string, string> = {
   QUEUED: "In coda",
   RUNNING: "Analisi in corso",
   PROCESSING: "Analisi in corso",
-  COMPLETED: "Completato",
-  PARTIAL: "Completato con dati parziali",
+  COMPLETED: "Elaborazione terminata",
+  PARTIAL: "Elaborazione terminata · dati parziali",
   FAILED: "Errore"
 };
 
@@ -44,6 +45,14 @@ const WARNING_LABELS: Record<string, string> = {
     "La continuità del tracking non è stata misurata.",
   INSUFFICIENT_TRACKING_SAMPLES:
     "I campioni osservati non sono sufficienti per una conclusione affidabile.",
+  PLAYER_ANCHOR_NOT_FOUND:
+    "Il giocatore selezionato non è stato ritrovato nei riferimenti.",
+  PLAYER_RESELECTION_REQUIRED:
+    "Seleziona un riferimento più nitido del giocatore per riprovare.",
+  PLAYER_ANCHOR_ACQUISITION_FAILED:
+    "Non è stato possibile elaborare i riferimenti del giocatore. Riprova.",
+  PLAYER_TRACKING_RETRY_REQUIRED:
+    "Il tracking del giocatore si è interrotto per un errore tecnico. Riprova senza cambiare selezione.",
   MISSING_CLIPS: "Una o più clip previste non sono disponibili."
 };
 
@@ -51,7 +60,11 @@ const PRE_RESULT_WARNING_CODES = new Set([
   "TRACKING_TIMEOUT",
   "TRACKING_PARTIAL_TIMEOUT",
   "RETRY_ENQUEUE_FAILED",
-  "WORKER_RESTARTED"
+  "WORKER_RESTARTED",
+  "PLAYER_ANCHOR_NOT_FOUND",
+  "PLAYER_RESELECTION_REQUIRED",
+  "PLAYER_ANCHOR_ACQUISITION_FAILED",
+  "PLAYER_TRACKING_RETRY_REQUIRED"
 ]);
 
 const PRE_RESULT_WARNING_MESSAGES = new Set(
@@ -107,8 +120,10 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
   }, []);
 
   const pct = Math.max(0, Math.min(100, job.progress.pct));
+  const outcome = deriveAnalysisOutcome(job);
   const statusLabel = STATUS_LABELS[job.status] ?? job.status;
-  const isFailed = job.status === "FAILED";
+  const trackingFailed = outcome.trackingState === "failed";
+  const isFailed = job.status === "FAILED" || trackingFailed;
   const isActive = ["QUEUED", "RUNNING", "PROCESSING"].includes(job.status);
   const isTerminal = ["COMPLETED", "PARTIAL", "FAILED"].includes(job.status);
   const visibleWarnings = isTerminal
@@ -116,10 +131,33 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
     : job.warnings.filter(isOperationalWarning);
   const trackingPhase =
     job.progress.phase === "TRACKING" ||
-    Boolean(job.progress.step?.toUpperCase().includes("TRACK"));
-  const windowProgress = parseWindowProgress(job.progress.message);
+    Boolean(job.progress.step?.toUpperCase().includes("TRACK")) ||
+    outcome.windowsTotal !== null ||
+    outcome.trackingState !== "unverified";
+  const parsedWindowProgress = parseWindowProgress(job.progress.message);
+  const windowProgress =
+    outcome.windowsTotal !== null
+      ? {
+          label: `${outcome.windowsProcessed ?? "—"} / ${outcome.windowsTotal}`
+        }
+      : job.progress.stats.windowsTotal !== null
+        ? {
+            label: `${job.progress.stats.windowsCompleted ?? "—"} / ${job.progress.stats.windowsTotal}`
+          }
+        : parsedWindowProgress;
   const heartbeat = relativeUpdate(job.progress.updatedAt ?? job.updatedAt, now);
   const stale = isActive && heartbeat.stale;
+  const doneStep = ["DONE", "COMPLETED"].includes(
+    job.progress.step?.toUpperCase() ?? ""
+  );
+  const progressHeadline = trackingFailed
+    ? "Il giocatore selezionato non è stato ritrovato"
+    : doneStep
+      ? "Elaborazione terminata"
+      : job.progress.message ?? "Elaborazione del job";
+  const progressPhase = doneStep
+    ? "pipeline terminata"
+    : job.progress.phase ?? job.progress.step ?? "workflow";
 
   return (
     <section
@@ -132,7 +170,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
       }`}
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div aria-live="polite" aria-atomic="true">
           <p
             className={`text-xs font-semibold uppercase tracking-[0.2em] ${
               isFailed
@@ -145,8 +183,13 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
             {statusLabel}
           </p>
           <h2 className="mt-2 text-lg font-semibold text-white">
-            {job.progress.message ?? "Elaborazione del job"}
+            {progressHeadline}
           </h2>
+          {trackingFailed ? (
+            <p className="mt-2 text-sm text-rose-200">
+              Tracking non riuscito: nessuna metrica del giocatore è stata prodotta.
+            </p>
+          ) : null}
           <p className="mt-1 break-all font-mono text-xs text-slate-500">{job.id}</p>
           {stale ? (
             <p className="mt-3 text-sm text-amber-200">
@@ -157,7 +200,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
         <div className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-right">
           <p className="text-2xl font-bold text-white">{Math.round(pct)}%</p>
           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
-            {job.progress.phase ?? job.progress.step ?? "workflow"}
+            {progressPhase}
           </p>
         </div>
       </div>
@@ -190,14 +233,18 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
             {heartbeat.label}
           </dd>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Rilevamenti</dt>
-          <dd className="mt-1 text-lg font-semibold text-slate-100">{metric(job.progress.stats.detections)}</dd>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Tracklet</dt>
-          <dd className="mt-1 text-lg font-semibold text-slate-100">{metric(job.progress.stats.tracklets)}</dd>
-        </div>
+        {!trackingFailed ? (
+          <>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+              <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Rilevamenti</dt>
+              <dd className="mt-1 text-lg font-semibold text-slate-100">{metric(job.progress.stats.detections)}</dd>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+              <dt className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Tracklet</dt>
+              <dd className="mt-1 text-lg font-semibold text-slate-100">{metric(job.progress.stats.tracklets)}</dd>
+            </div>
+          </>
+        ) : null}
       </dl>
 
       {visibleWarnings.length > 0 ? (
