@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-import { deriveAnalysisOutcome } from "@/lib/analysis-outcome";
+import {
+  deriveAnalysisOutcome,
+  type TrackingFailureKind
+} from "@/lib/analysis-outcome";
 import type { AnalysisJob } from "@/lib/workflow-api";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -51,8 +54,18 @@ const WARNING_LABELS: Record<string, string> = {
     "Seleziona un riferimento più nitido del giocatore per riprovare.",
   PLAYER_ANCHOR_ACQUISITION_FAILED:
     "Non è stato possibile elaborare i riferimenti del giocatore. Riprova.",
+  ANCHOR_TRACK_COLOR_UNVERIFIED:
+    "I riferimenti sono stati trovati, ma il colore della divisa non è rimasto verificabile.",
+  ANCHOR_REJECTED:
+    "Il controllo d’identità ha rifiutato il tracking per evitare di attribuire dati al giocatore sbagliato.",
+  AUTONOMOUS_REID_NOT_PROVEN:
+    "I riferimenti manuali sono validi, ma non è stato provato alcun collegamento autonomo tra finestre.",
+  SPARSE_CROSS_WINDOW_EVIDENCE:
+    "Il giocatore è stato collegato tra finestre, ma l’evidenza autonoma copre meno del 5% del video.",
   PLAYER_TRACKING_RETRY_REQUIRED:
     "Il tracking del giocatore si è interrotto per un errore tecnico. Riprova senza cambiare selezione.",
+  ANALYSIS_ATTEMPT_MISMATCH:
+    "I dati appartengono a tentativi diversi e sono stati nascosti. Riprova l’analisi.",
   MISSING_CLIPS: "Una o più clip previste non sono disponibili."
 };
 
@@ -64,6 +77,10 @@ const PRE_RESULT_WARNING_CODES = new Set([
   "PLAYER_ANCHOR_NOT_FOUND",
   "PLAYER_RESELECTION_REQUIRED",
   "PLAYER_ANCHOR_ACQUISITION_FAILED",
+  "ANCHOR_TRACK_COLOR_UNVERIFIED",
+  "ANCHOR_REJECTED",
+  "AUTONOMOUS_REID_NOT_PROVEN",
+  "SPARSE_CROSS_WINDOW_EVIDENCE",
   "PLAYER_TRACKING_RETRY_REQUIRED"
 ]);
 
@@ -72,6 +89,35 @@ const PRE_RESULT_WARNING_MESSAGES = new Set(
     .map((code) => WARNING_LABELS[code])
     .filter((message): message is string => Boolean(message))
 );
+
+const TRACKING_FAILURE_COPY: Record<
+  TrackingFailureKind,
+  { headline: string; detail: string }
+> = {
+  technical: {
+    headline: "Tracking interrotto da un errore tecnico",
+    detail:
+      "La selezione resta valida: riprova l’analisi senza cambiare i riferimenti."
+  },
+  anchor_rejected: {
+    headline: "Riferimenti trovati, ma identità rifiutata",
+    detail:
+      "Il controllo d’identità ha respinto le tracce per evitare attribuzioni al giocatore sbagliato."
+  },
+  autonomous_unproven: {
+    headline: "Riferimenti trovati, tracking tra finestre non provato",
+    detail:
+      "Le ancore manuali sono valide, ma manca un collegamento autonomo affidabile tra finestre."
+  },
+  anchor_missing: {
+    headline: "Il giocatore selezionato non è stato ritrovato",
+    detail: "Tracking non riuscito: nessuna metrica del giocatore è stata prodotta."
+  },
+  unknown: {
+    headline: "Tracking del giocatore non riuscito",
+    detail: "Il tentativo è terminato senza metriche affidabili del giocatore."
+  }
+};
 
 const metric = (value: number | null) =>
   value === null ? "—" : String(Math.round(value));
@@ -119,16 +165,21 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
     return () => window.clearInterval(interval);
   }, []);
 
-  const pct = Math.max(0, Math.min(100, job.progress.pct));
   const outcome = deriveAnalysisOutcome(job);
+  const attemptMismatch = outcome.analysisAttemptMismatch;
+  const pct = attemptMismatch
+    ? null
+    : Math.max(0, Math.min(100, job.progress.pct));
   const statusLabel = STATUS_LABELS[job.status] ?? job.status;
   const trackingFailed = outcome.trackingState === "failed";
   const isFailed = job.status === "FAILED" || trackingFailed;
   const isActive = ["QUEUED", "RUNNING", "PROCESSING"].includes(job.status);
   const isTerminal = ["COMPLETED", "PARTIAL", "FAILED"].includes(job.status);
-  const visibleWarnings = isTerminal
-    ? job.warnings
-    : job.warnings.filter(isOperationalWarning);
+  const visibleWarnings = attemptMismatch
+    ? ["ANALYSIS_ATTEMPT_MISMATCH"]
+    : isTerminal
+      ? job.warnings
+      : job.warnings.filter(isOperationalWarning);
   const trackingPhase =
     job.progress.phase === "TRACKING" ||
     Boolean(job.progress.step?.toUpperCase().includes("TRACK")) ||
@@ -136,7 +187,9 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
     outcome.trackingState !== "unverified";
   const parsedWindowProgress = parseWindowProgress(job.progress.message);
   const windowProgress =
-    outcome.windowsTotal !== null
+    attemptMismatch
+      ? { label: "—" }
+      : outcome.windowsTotal !== null
       ? {
           label: `${outcome.windowsProcessed ?? "—"} / ${outcome.windowsTotal}`
         }
@@ -147,17 +200,21 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
         : parsedWindowProgress;
   const heartbeat = relativeUpdate(job.progress.updatedAt ?? job.updatedAt, now);
   const stale = isActive && heartbeat.stale;
-  const doneStep = ["DONE", "COMPLETED"].includes(
-    job.progress.step?.toUpperCase() ?? ""
-  );
+  const doneStep =
+    outcome.pipelineState === "finished" ||
+    ["DONE", "COMPLETED"].includes(job.progress.step?.toUpperCase() ?? "");
+  const failureCopy =
+    TRACKING_FAILURE_COPY[outcome.trackingFailureKind ?? "unknown"];
   const progressHeadline = trackingFailed
-    ? "Il giocatore selezionato non è stato ritrovato"
+    ? failureCopy.headline
     : doneStep
       ? "Elaborazione terminata"
       : job.progress.message ?? "Elaborazione del job";
-  const progressPhase = doneStep
-    ? "pipeline terminata"
-    : job.progress.phase ?? job.progress.step ?? "workflow";
+  const progressPhase = attemptMismatch
+    ? "tentativo non coerente"
+    : doneStep
+      ? "pipeline terminata"
+      : job.progress.phase ?? job.progress.step ?? "workflow";
 
   return (
     <section
@@ -187,7 +244,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
           </h2>
           {trackingFailed ? (
             <p className="mt-2 text-sm text-rose-200">
-              Tracking non riuscito: nessuna metrica del giocatore è stata prodotta.
+              {failureCopy.detail}
             </p>
           ) : null}
           <p className="mt-1 break-all font-mono text-xs text-slate-500">{job.id}</p>
@@ -198,7 +255,9 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
           ) : null}
         </div>
         <div className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-right">
-          <p className="text-2xl font-bold text-white">{Math.round(pct)}%</p>
+          <p className="text-2xl font-bold text-white">
+            {pct === null ? "—" : `${Math.round(pct)}%`}
+          </p>
           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
             {progressPhase}
           </p>
@@ -210,7 +269,7 @@ export function JobProgressPanel({ job }: { job: AnalysisJob }) {
           className={`h-full rounded-full transition-[width] duration-500 ${
             isFailed ? "bg-rose-500" : stale ? "bg-amber-400" : "bg-emerald-500"
           }`}
-          style={{ width: `${pct}%` }}
+          style={{ width: `${pct ?? 0}%` }}
         />
       </div>
 
