@@ -1,3 +1,9 @@
+import {
+  MAX_PLAYER_SELECTIONS,
+  toSelectionApiPayload,
+  type PlayerSelection
+} from "@/lib/player-selections";
+
 export type JsonRecord = Record<string, unknown>;
 
 export type BoundingBox = {
@@ -505,6 +511,19 @@ export const pickPlayer = async (
   await request(`/jobs/${encodeURIComponent(jobId)}/pick-player`, {
     method: "POST",
     body: JSON.stringify({ frame_key: frameKey, track_id: trackId })
+  });
+};
+
+export const confirmSelections = async (
+  jobId: string,
+  selections: readonly PlayerSelection[]
+): Promise<void> => {
+  if (selections.length < 1 || selections.length > MAX_PLAYER_SELECTIONS) {
+    throw new Error(`Seleziona da 1 a ${MAX_PLAYER_SELECTIONS} riferimenti dello stesso giocatore.`);
+  }
+  await request(`/jobs/${encodeURIComponent(jobId)}/selection`, {
+    method: "POST",
+    body: JSON.stringify({ selections: selections.map(toSelectionApiPayload) })
   });
 };
 

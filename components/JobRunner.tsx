@@ -175,10 +175,11 @@ export default function JobRunner() {
           <JobProgressPanel job={workflow.job} />
           <PlayerPicker
             frames={workflow.frames}
-            selection={workflow.selection}
+            selections={workflow.selections}
             busy={workflow.busyAction === "select-player"}
-            onSelect={workflow.setSelection}
-            onConfirm={workflow.choosePlayer}
+            onToggle={workflow.toggleSelection}
+            onClear={() => workflow.setSelections([])}
+            onConfirm={workflow.choosePlayerAnchors}
           />
         </div>
       ) : null}
