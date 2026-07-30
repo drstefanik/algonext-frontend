@@ -95,13 +95,27 @@ export type AnalysisJob = {
 
 export type CreateJobInput = {
   source: string;
-  sourceMode: "url" | "object";
+  sourceMode: "url" | "object" | "lgi";
   bucket?: string;
   role: string;
   category: string;
   teamName: string;
   shirtNumber?: number;
   fullMatchMode?: boolean;
+};
+
+export type LgiMatchSummary = {
+  id: string;
+  title: string;
+  slug: string;
+  homeTeam: string;
+  awayTeam: string;
+  competition: string | null;
+  season: string | null;
+  durationSeconds: number | null;
+  provider: "mux" | "vimeo";
+  lineupCount: number;
+  pilot: boolean;
 };
 
 export class WorkflowApiError extends Error {
@@ -524,9 +538,11 @@ export const createJob = async (input: CreateJobInput): Promise<AnalysisJob> => 
   if (input.shirtNumber !== undefined) payload.shirt_number = input.shirtNumber;
   if (input.sourceMode === "url") {
     payload.video_url = input.source.trim();
-  } else {
+  } else if (input.sourceMode === "object") {
     payload.video_key = input.source.trim();
     payload.video_bucket = input.bucket?.trim();
+  } else {
+    payload.lgi_match_id = input.source.trim();
   }
   const created = await request<JsonRecord>("/jobs", {
     method: "POST",
@@ -535,6 +551,48 @@ export const createJob = async (input: CreateJobInput): Promise<AnalysisJob> => 
   const id = asString(first(created.job_id, created.jobId, created.id));
   if (!id) throw new Error("Create-job response is missing job_id.");
   return getJob(id);
+};
+
+const normalizeLgiMatch = (value: unknown): LgiMatchSummary | null => {
+  const source = asRecord(value);
+  const id = asString(source.id);
+  const title = asString(source.title);
+  const provider = asString(source.provider)?.toLowerCase();
+  if (!id || !title || (provider !== "mux" && provider !== "vimeo")) return null;
+  return {
+    id,
+    title,
+    slug: asString(source.slug) ?? "",
+    homeTeam: asString(source.home_team) ?? "",
+    awayTeam: asString(source.away_team) ?? "",
+    competition: asString(source.competition),
+    season: asString(source.season),
+    durationSeconds: asNumber(source.duration_seconds),
+    provider,
+    lineupCount: asNumber(source.lineup_count) ?? 0,
+    pilot: asBoolean(source.pilot)
+  };
+};
+
+export const getLgiMatches = async ({
+  query = "",
+  pilotOnly = false,
+  limit = 50
+}: {
+  query?: string;
+  pilotOnly?: boolean;
+  limit?: number;
+} = {}): Promise<LgiMatchSummary[]> => {
+  const params = new URLSearchParams({
+    query,
+    pilot_only: String(pilotOnly),
+    limit: String(Math.max(1, Math.min(limit, 100)))
+  });
+  const payload = await request<JsonRecord>(`/integrations/lgi/matches?${params.toString()}`);
+  if (!Array.isArray(payload.items)) return [];
+  return payload.items
+    .map(normalizeLgiMatch)
+    .filter((item): item is LgiMatchSummary => Boolean(item));
 };
 
 export const getJob = async (jobId: string): Promise<AnalysisJob> =>
