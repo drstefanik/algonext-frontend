@@ -1,8 +1,12 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
-import type { CreateJobInput } from "@/lib/workflow-api";
+import {
+  getLgiMatches,
+  type CreateJobInput,
+  type LgiMatchSummary
+} from "@/lib/workflow-api";
 
 const ROLES = [
   "Goalkeeper",
@@ -23,19 +27,77 @@ export function JobCreateForm({
   busy: boolean;
   onSubmit: (input: CreateJobInput) => Promise<void>;
 }) {
-  const [sourceMode, setSourceMode] = useState<"url" | "object">("url");
+  const [sourceMode, setSourceMode] = useState<"url" | "object" | "lgi">("lgi");
   const [source, setSource] = useState("");
+  const [lgiQuery, setLgiQuery] = useState("");
+  const [lgiMatches, setLgiMatches] = useState<LgiMatchSummary[]>([]);
+  const [lgiLoading, setLgiLoading] = useState(false);
+  const [lgiError, setLgiError] = useState<string | null>(null);
   const [bucket, setBucket] = useState("fnh");
   const [role, setRole] = useState("Midfielder");
   const [category, setCategory] = useState("U17");
   const [fullMatchMode, setFullMatchMode] = useState(true);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const selectedLgiMatch = useMemo(
+    () => lgiMatches.find((match) => match.id === source) ?? null,
+    [lgiMatches, source]
+  );
+
+  useEffect(() => {
+    if (sourceMode !== "lgi") return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setLgiLoading(true);
+      setLgiError(null);
+      void getLgiMatches({
+        query: lgiQuery.trim(),
+        pilotOnly: !lgiQuery.trim(),
+        limit: 50
+      })
+        .then((items) => {
+          if (cancelled) return;
+          setLgiMatches(items);
+          setSource((current) =>
+            items.some((item) => item.id === current) ? current : items[0]?.id ?? ""
+          );
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setLgiMatches([]);
+          setSource("");
+          setLgiError(
+            error instanceof Error
+              ? error.message
+              : "Catalogo LGI momentaneamente non disponibile."
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setLgiLoading(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [sourceMode, lgiQuery]);
+
+  useEffect(() => {
+    if (!selectedLgiMatch?.competition) return;
+    const inferredCategory = selectedLgiMatch.competition.match(/\bU(1[3-9])\b/i)?.[0];
+    if (inferredCategory && CATEGORIES.includes(inferredCategory.toUpperCase())) {
+      setCategory(inferredCategory.toUpperCase());
+    }
+  }, [selectedLgiMatch]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedSource = source.trim();
     if (!normalizedSource) {
-      setValidationError("Inserisci l’URL del video oppure la chiave dell’oggetto.");
+      setValidationError(
+        sourceMode === "lgi"
+          ? "Seleziona una partita LGI Channel."
+          : "Inserisci l’URL del video oppure la chiave dell’oggetto."
+      );
       return;
     }
     if (sourceMode === "url" && !/^https?:\/\//i.test(normalizedSource)) {
@@ -72,6 +134,7 @@ export function JobCreateForm({
         <div className="mt-2 inline-flex rounded-xl border border-slate-800 bg-slate-950 p-1">
           {(
             [
+              ["lgi", "LGI Channel"],
               ["url", "URL pubblico"],
               ["object", "MinIO / S3"]
             ] as const
@@ -92,6 +155,92 @@ export function JobCreateForm({
         </div>
       </div>
 
+      {sourceMode === "lgi" ? (
+        <div className="space-y-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className={labelClass}>Archivio LGI Channel</p>
+              <p className="mt-1 text-sm text-slate-400">
+                Connessione protetta in sola lettura. Le analisi vengono salvate esclusivamente
+                su AlgoNext.
+              </p>
+            </div>
+            <span className="w-fit rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">
+              Sola lettura
+            </span>
+          </div>
+
+          <label className="block">
+            <span className={labelClass}>Cerca altre partite</span>
+            <input
+              value={lgiQuery}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setLgiQuery(event.target.value)}
+              className={inputClass}
+              placeholder="Squadra, competizione o titolo…"
+              disabled={busy}
+            />
+          </label>
+
+          <label className="block">
+            <span className={labelClass}>
+              {lgiQuery.trim() ? "Risultati archivio" : "Pilot selezionato"}
+            </span>
+            <select
+              value={source}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => setSource(event.target.value)}
+              className={inputClass}
+              disabled={busy || lgiLoading || lgiMatches.length === 0}
+            >
+              {lgiLoading ? <option>Caricamento partite…</option> : null}
+              {!lgiLoading && lgiMatches.length === 0 ? (
+                <option value="">Nessuna partita disponibile</option>
+              ) : null}
+              {lgiMatches.map((match) => (
+                <option key={match.id} value={match.id}>
+                  {match.title} · {match.provider.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedLgiMatch ? (
+            <div className="grid gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm sm:grid-cols-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                  Partita
+                </p>
+                <p className="mt-1 text-slate-200">
+                  {selectedLgiMatch.homeTeam} – {selectedLgiMatch.awayTeam}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                  Contesto
+                </p>
+                <p className="mt-1 text-slate-200">
+                  {[selectedLgiMatch.competition, selectedLgiMatch.season]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                  Distinta
+                </p>
+                <p className="mt-1 text-slate-200">
+                  {selectedLgiMatch.lineupCount} giocatori · numeri completi
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {lgiError ? (
+            <p className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+              {lgiError}
+            </p>
+          ) : null}
+        </div>
+      ) : (
       <div className="grid gap-5 lg:grid-cols-2">
         <label>
           <span className={labelClass}>
@@ -126,6 +275,7 @@ export function JobCreateForm({
           </div>
         )}
       </div>
+      )}
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
         <p className={labelClass}>Contesto dell’analisi</p>
