@@ -38,6 +38,9 @@ const asStringArray = (value: unknown): string[] =>
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
     : [];
 
+const asBoolean = (value: unknown): boolean | null =>
+  typeof value === "boolean" ? value : null;
+
 const humanize = (value: string) =>
   value
     .toLowerCase()
@@ -78,6 +81,45 @@ const CAPABILITY_LABELS: Record<string, string> = {
   event_detection: "Riconoscimento eventi",
   athletic_metrics: "Metriche atletiche reali",
   technical_tactical_scoring: "Valutazione tecnico-tattica"
+};
+
+type CapabilityStatus = "available" | "experimental" | "foundation" | "unavailable";
+
+const normalizeCapabilityStatus = (
+  value: unknown,
+  available: boolean
+): CapabilityStatus => {
+  if (
+    value === "available" ||
+    value === "experimental" ||
+    value === "foundation" ||
+    value === "unavailable"
+  ) {
+    return value;
+  }
+  return available ? "available" : "unavailable";
+};
+
+const CAPABILITY_STATUS_COPY: Record<
+  CapabilityStatus,
+  { label: string; className: string }
+> = {
+  available: {
+    label: "Disponibile",
+    className: "bg-emerald-500/15 text-emerald-300"
+  },
+  experimental: {
+    label: "Sperimentale",
+    className: "bg-sky-500/15 text-sky-300"
+  },
+  foundation: {
+    label: "Base pronta",
+    className: "bg-amber-500/15 text-amber-300"
+  },
+  unavailable: {
+    label: "Non disponibile",
+    className: "bg-slate-800 text-slate-500"
+  }
 };
 
 const TRACKING_FAILURE_COPY: Record<
@@ -251,6 +293,9 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
   const summary = asRecord(raw.summary);
   const signals = asRecord(raw.tracking_signals ?? trackingQuality.signals);
   const capabilities = asRecord(raw.capabilities ?? trackingQuality.capabilities);
+  const capabilityDetails = asRecord(
+    raw.capability_details ?? trackingQuality.capability_details
+  );
   const trackingQualityIndex = outcome.metricsVisible
     ? asNumber(raw.tracking_quality_index) ??
       asNumber(summary.tracking_quality_index) ??
@@ -267,9 +312,23 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
     ...asStringArray(raw.reason_codes),
     ...asStringArray(trackingQuality.reason_codes)
   ].filter((value, index, values) => values.indexOf(value) === index);
-  const capabilityEntries = Object.entries(capabilities).filter(
-    (entry): entry is [string, boolean] => typeof entry[1] === "boolean"
+  const capabilityKeys = Array.from(
+    new Set([...Object.keys(CAPABILITY_LABELS), ...Object.keys(capabilities), ...Object.keys(capabilityDetails)])
   );
+  const capabilityEntries = capabilityKeys
+    .map((key) => {
+      const detail = asRecord(capabilityDetails[key]);
+      const available =
+        asBoolean(detail.available) ?? asBoolean(capabilities[key]) ?? false;
+      const status = normalizeCapabilityStatus(detail.status, available);
+      return {
+        key,
+        available,
+        status,
+        method: asString(detail.method)
+      };
+    })
+    .filter((entry) => entry.key in capabilities || entry.key in capabilityDetails);
   const signalEntries = outcome.metricsVisible
     ? SIGNALS.map((definition) => ({
         ...definition,
@@ -368,23 +427,32 @@ function TrackingOnlyPanel({ job, preliminary }: { job: AnalysisJob; preliminary
         <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
           <h3 className="text-lg font-semibold text-white">Capacità effettive</h3>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {capabilityEntries.map(([key, available]) => (
+            {capabilityEntries.map(({ key, available, status, method }) => {
+              const statusCopy = CAPABILITY_STATUS_COPY[status];
+              return (
               <div
                 key={key}
                 className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3"
               >
-                <span className="text-sm text-slate-300">{CAPABILITY_LABELS[key] ?? humanize(key)}</span>
+                <span>
+                  <span className="block text-sm text-slate-300">
+                    {CAPABILITY_LABELS[key] ?? humanize(key)}
+                  </span>
+                  {method ? (
+                    <span className="mt-0.5 block font-mono text-[9px] text-slate-600">
+                      {method}
+                    </span>
+                  ) : null}
+                </span>
                 <span
-                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${
-                    available
-                      ? "bg-emerald-500/15 text-emerald-300"
-                      : "bg-slate-800 text-slate-500"
-                  }`}
+                  title={available ? "Funzione operativa nel job" : undefined}
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${statusCopy.className}`}
                 >
-                  {available ? "Disponibile" : "Non disponibile"}
+                  {statusCopy.label}
                 </span>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
