@@ -28,8 +28,8 @@ import {
 import { transitionReselectionRecovery } from "@/lib/reselection-recovery";
 import { mayCommitRefresh } from "@/lib/refresh-commit-guard";
 import { retryJob } from "@/lib/retry-job";
+import { readStoredJobId, storeJobId, mergeJobFrames } from "@/lib/workflow-session";
 
-const STORAGE_KEY = "algonext.current-job.v2";
 const TERMINAL_STATUSES = new Set(["COMPLETED", "PARTIAL", "FAILED"]);
 const ACTIVE_ANALYSIS_STATUSES = new Set(["QUEUED", "RUNNING", "PROCESSING"]);
 export type { PlayerSelection } from "@/lib/player-selections";
@@ -42,24 +42,6 @@ export type WorkflowStage =
   | "analysis"
   | "result"
   | "failed";
-
-const mergeFrames = (primary: PreviewFrame[], fallback: PreviewFrame[]) => {
-  const byKey = new Map<string, PreviewFrame>();
-  for (const frame of fallback) byKey.set(frame.key, frame);
-  for (const frame of primary) {
-    const previous = byKey.get(frame.key);
-    byKey.set(frame.key, {
-      ...previous,
-      ...frame,
-      tracks: frame.tracks.length > 0 ? frame.tracks : previous?.tracks ?? []
-    });
-  }
-  return [...byKey.values()].sort(
-    (left, right) =>
-      (left.timeSec ?? Number.MAX_SAFE_INTEGER) -
-      (right.timeSec ?? Number.MAX_SAFE_INTEGER)
-  );
-};
 
 const getPollingDelay = (job: AnalysisJob | null) => {
   if (!job) return 2_500;
@@ -134,15 +116,13 @@ export function useAnalysisWorkflow() {
   );
 
   const persistJobId = useCallback((nextJobId: string | null) => {
-    if (typeof window === "undefined") return;
-    if (nextJobId) window.localStorage.setItem(STORAGE_KEY, nextJobId);
-    else window.localStorage.removeItem(STORAGE_KEY);
+    storeJobId(nextJobId);
   }, []);
 
   const loadFrames = useCallback(async (id: string, currentFrames: PreviewFrame[]) => {
     try {
       const fetched = await getFrames(id, 32);
-      return mergeFrames(currentFrames, fetched);
+      return mergeJobFrames(id, fetched, currentFrames);
     } catch (frameError) {
       if (isFramesNotReadyError(frameError)) return currentFrames;
       throw frameError;
@@ -173,7 +153,7 @@ export function useAnalysisWorkflow() {
         setJob(nextJob);
         setJobId(nextJob.id);
         persistJobId(nextJob.id);
-        setFrames((existing) => mergeFrames(nextJob.previewFrames, existing));
+        setFrames((existing) => mergeJobFrames(nextJob.id, nextJob.previewFrames, existing));
         const recovery = transitionReselectionRecovery(
           reselectionClearedJobId.current,
           nextJob
@@ -185,10 +165,16 @@ export function useAnalysisWorkflow() {
         setError(null);
 
         if (nextJob.previewFrames.length === 0 && !TERMINAL_STATUSES.has(nextJob.status)) {
-          const fallback = await loadFrames(nextJob.id, []);
-          if (!canCommit()) return null;
-          if (fallback.length > 0) {
-            setFrames((existing) => mergeFrames(existing, fallback));
+          try {
+            const fallback = await loadFrames(nextJob.id, []);
+            if (!canCommit()) return null;
+            if (fallback.length > 0) {
+              setFrames((existing) => mergeJobFrames(nextJob.id, fallback, existing));
+            }
+          } catch (frameError) {
+            // The job was loaded successfully. A temporary preview outage
+            // must not clear its ID or stop the next polling attempt.
+            if (canCommit()) setError(formatError(frameError));
           }
         }
         return canCommit() ? nextJob : null;
@@ -232,6 +218,10 @@ export function useAnalysisWorkflow() {
       const epoch = beginTransition();
       setBusyAction("resume");
       setError(null);
+      setJob(null);
+      setFrames([]);
+      setSelections([]);
+      reselectionClearedJobId.current = null;
       setJobId(normalized);
       persistJobId(normalized);
       try {
@@ -254,7 +244,7 @@ export function useAnalysisWorkflow() {
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = readStoredJobId();
     if (!stored) {
       setIsBootstrapping(false);
       return;
@@ -304,6 +294,9 @@ export function useAnalysisWorkflow() {
       const epoch = beginTransition();
       setBusyAction("create");
       setError(null);
+      setJob(null);
+      setJobId(null);
+      persistJobId(null);
       reselectionClearedJobId.current = null;
       setSelections([]);
       setFrames([]);

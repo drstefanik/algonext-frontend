@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "incremental": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2020",
+    "rootDir": ".",
+    "outDir": ".tmp-reliability-tests"
+  },
+  "include": ["tests/reliability.test.ts"],
+  "exclude": ["node_modules", ".next", ".tmp-reliability-tests"]
+}
