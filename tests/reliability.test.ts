@@ -43,6 +43,16 @@ test("preparation retry requires an explicit preparation failure", () => {
   assert.equal(canRetryPreparation({ ...job, playerSaved: true }), false);
   assert.equal(canRetryPreparation({ ...job, failureReason: "TRACKING_TIMEOUT" }), false);
 });
+test("only a preparation still unstarted after ten minutes exposes recovery", () => {
+  const now = Date.parse("2026-09-25T16:30:00Z");
+  const job = normalizeJob({ id: "one", status: "CREATED", created_at: "2026-09-25T16:19:00Z", progress: { step: "CREATED", pct: 0 } });
+  assert.equal(canRetryPreparation(job, now), true);
+  assert.equal(canRetryPreparation({ ...job, createdAt: "2026-09-25T16:25:00Z" }, now), false);
+  assert.equal(canRetryPreparation({ ...job, createdAt: null }, now), false);
+  assert.equal(canRetryPreparation({ ...job, progress: { ...job.progress, step: "EXTRACTING_PREVIEWS" } }, now), false);
+  assert.equal(canRetryPreparation({ ...job, progress: { ...job.progress, updatedAt: "2026-09-25T16:29:00Z" } }, now), false);
+  assert.equal(canRetryPreparation({ ...job, playerSaved: true }, now), false);
+});
 test("a created job ID survives a lost follow-up GET and remains pollable", async () => {
   let calls = 0;
   globalThis.fetch = async () => {
