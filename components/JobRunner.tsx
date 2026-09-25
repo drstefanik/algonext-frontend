@@ -163,8 +163,9 @@ export default function JobRunner() {
           <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
             <h2 className="text-lg font-semibold text-white">Preparazione automatica</h2>
             <p className="mt-2 text-sm leading-6 text-slate-400">
-              Il worker sta estraendo i frame e rilevando le tracce. Non serve ricaricare la
-              pagina; il polling riprenderà automaticamente anche dopo un errore temporaneo.
+              {workflow.job.progress.step === "CREATED"
+                ? "Il video è in coda. La preparazione inizierà appena il worker sarà disponibile."
+                : "Il worker sta estraendo i frame e rilevando le tracce. La pagina si aggiorna automaticamente."}
             </p>
             <div className="mt-5 flex items-center gap-3 text-sm text-slate-300">
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
@@ -172,6 +173,21 @@ export default function JobRunner() {
                 ? `${workflow.frames.length} frame ricevuti, attendo le tracce…`
                 : "Attendo i primi frame…"}
             </div>
+            {canRetryPreparation(workflow.job) ? (
+              <div className="mt-5">
+                <p className="mb-3 text-sm text-slate-400">
+                  La preparazione non è ancora iniziata dopo dieci minuti. Puoi reinviare la richiesta sullo stesso job.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void workflow.retry(false, currentAnalysisAttemptId)}
+                  disabled={workflow.isBusy}
+                  className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-slate-100 disabled:opacity-50"
+                >
+                  {workflow.busyAction === "retry" ? "Riavvio…" : "Riprova preparazione"}
+                </button>
+              </div>
+            ) : null}
           </section>
         </div>
       ) : null}

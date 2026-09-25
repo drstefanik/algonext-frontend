@@ -38,9 +38,13 @@ export const mergeJobFrames = (
   );
 };
 
-export const canRetryPreparation = (job: AnalysisJob): boolean =>
-  job.status === "FAILED" &&
-  !job.playerSaved &&
-  !job.targetSaved &&
-  ["preview_generation_failed", "candidates_generation_failed", "PREPARATION_ENQUEUE_FAILED"]
-    .includes(job.failureReason ?? "");
+export const canRetryPreparation = (job: AnalysisJob, now = Date.now()): boolean => {
+  if (job.playerSaved || job.targetSaved) return false;
+  if (job.status === "FAILED") {
+    return ["preview_generation_failed", "candidates_generation_failed", "PREPARATION_ENQUEUE_FAILED"]
+      .includes(job.failureReason ?? "");
+  }
+  const queuedAt = Date.parse(job.progress.updatedAt ?? job.createdAt ?? "");
+  return job.status === "CREATED" && job.progress.step === "CREATED" &&
+    job.progress.pct === 0 && Number.isFinite(queuedAt) && now - queuedAt >= 600_000;
+};
