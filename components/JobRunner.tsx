@@ -8,6 +8,7 @@ import { JobProgressPanel } from "@/components/workflow/JobProgressPanel";
 import { PlayerPicker } from "@/components/workflow/PlayerPicker";
 import { ResultPanel } from "@/components/workflow/ResultPanel";
 import { getTargetAnalysisAttemptId } from "@/lib/workflow-api";
+import { canRetryPreparation } from "@/lib/workflow-session";
 
 const STEPS: Array<{ key: WorkflowStage[]; label: string }> = [
   { key: ["create"], label: "Video" },
@@ -268,10 +269,12 @@ export default function JobRunner() {
             <p className="mt-3 max-w-3xl text-sm leading-6 text-rose-100/75">
               {workflow.job.playerSaved && workflow.job.targetSaved
                 ? "Il video, i frame e la selezione del giocatore restano salvati. Il retry riusa lo stesso job e il nuovo profilo CPU, senza ripetere la scelta manuale."
-                : "Il job non contiene ancora una selezione completa e non può essere riavviato in sicurezza. Crea un nuovo job dopo aver corretto la sorgente del video."}
+                : canRetryPreparation(workflow.job)
+                  ? "Puoi riprovare la preparazione sullo stesso video. I frame già disponibili vengono conservati."
+                  : "Il job non contiene ancora una selezione completa. Crea un nuovo job dopo aver corretto la sorgente del video."}
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
-              {workflow.job.playerSaved && workflow.job.targetSaved ? (
+              {(workflow.job.playerSaved && workflow.job.targetSaved) || canRetryPreparation(workflow.job) ? (
                 <button
                   type="button"
                   onClick={() =>
@@ -280,7 +283,7 @@ export default function JobRunner() {
                   disabled={workflow.busyAction === "retry"}
                   className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-slate-100 disabled:opacity-50"
                 >
-                  {workflow.busyAction === "retry" ? "Riavvio…" : "Riprova analisi"}
+                  {workflow.busyAction === "retry" ? "Riavvio…" : canRetryPreparation(workflow.job) ? "Riprova preparazione" : "Riprova analisi"}
                 </button>
               ) : null}
               <button

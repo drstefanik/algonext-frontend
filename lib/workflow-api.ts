@@ -2,13 +2,13 @@ import {
   MAX_PLAYER_SELECTIONS,
   toSelectionApiPayload,
   type PlayerSelection
-} from "@/lib/player-selections";
+} from "./player-selections";
 import {
   analysisAttemptHeaders,
   getResponseAnalysisAttemptId
-} from "@/lib/analysis-attempt-client";
+} from "./analysis-attempt-client";
 
-export { getTargetAnalysisAttemptId } from "@/lib/analysis-attempt-client";
+export { getTargetAnalysisAttemptId } from "./analysis-attempt-client";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -441,21 +441,23 @@ export const normalizeJob = (value: unknown): AnalysisJob => {
 };
 
 const readJson = async (response: Response): Promise<unknown> => {
+  if (response.status === 204 || response.status === 205) return {};
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     const text = await response.text();
     return text ? { message: text } : {};
   }
-  return response.json().catch(() => ({}));
+  // A truncated or aborted JSON body is a failed request, never a success.
+  return response.json();
 };
 
-const request = async <T,>(
+export const request = async <T,>(
   path: string,
   init: RequestInit = {},
   timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<T> => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${API_PREFIX}${path}`, {
       ...init,
@@ -470,7 +472,8 @@ const request = async <T,>(
     const payload = await readJson(response);
     const envelope = asRecord(payload);
     const meta = asRecord(envelope.meta);
-    const errorSource = asRecord(first(envelope.error, asRecord(envelope.detail).error));
+    const detail = asRecord(envelope.detail);
+    const errorSource = asRecord(first(envelope.error, detail.error, detail));
     const ok = response.ok && envelope.ok !== false;
 
     if (!ok) {
@@ -511,11 +514,18 @@ const request = async <T,>(
     return first(envelope.data, payload) as T;
   } catch (error) {
     if (error instanceof WorkflowApiError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (controller.signal.aborted) {
       throw new WorkflowApiError({
         status: 408,
         code: "REQUEST_TIMEOUT",
         message: "Il backend non ha risposto in tempo. Riprova."
+      });
+    }
+    if (error instanceof SyntaxError) {
+      throw new WorkflowApiError({
+        status: 502,
+        code: "INVALID_RESPONSE",
+        message: "Il backend ha restituito una risposta incompleta. Riprova."
       });
     }
     throw new WorkflowApiError({
@@ -524,7 +534,7 @@ const request = async <T,>(
       message: error instanceof Error ? error.message : "Errore di rete inatteso."
     });
   } finally {
-    window.clearTimeout(timeout);
+    clearTimeout(timeout);
   }
 };
 
@@ -550,7 +560,13 @@ export const createJob = async (input: CreateJobInput): Promise<AnalysisJob> => 
   });
   const id = asString(first(created.job_id, created.jobId, created.id));
   if (!id) throw new Error("Create-job response is missing job_id.");
-  return getJob(id);
+  try {
+    return await getJob(id);
+  } catch {
+    // POST already committed: retain its ID so polling can recover instead of
+    // prompting the user to create a duplicate job after a failed follow-up GET.
+    return normalizeJob({ ...created, id, status: "CREATED" });
+  }
 };
 
 const normalizeLgiMatch = (value: unknown): LgiMatchSummary | null => {

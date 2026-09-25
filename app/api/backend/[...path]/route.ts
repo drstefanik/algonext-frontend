@@ -16,7 +16,9 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
   "content-type",
   "content-disposition",
   "etag",
-  "last-modified"
+  "last-modified",
+  "retry-after",
+  "x-algonext-revision"
 ]);
 
 type RouteContext = {
@@ -98,7 +100,8 @@ const proxy = async (request: Request, context: RouteContext) => {
       signal: controller.signal
     });
 
-    return new Response(await upstream.arrayBuffer(), {
+    const bodyless = request.method === "HEAD" || [204, 205, 304].includes(upstream.status);
+    return new Response(bodyless ? null : await upstream.arrayBuffer(), {
       status: upstream.status,
       statusText: upstream.statusText,
       headers: buildResponseHeaders(upstream, requestId)
@@ -133,6 +136,7 @@ const proxy = async (request: Request, context: RouteContext) => {
 };
 
 export const GET = proxy;
+export const HEAD = proxy;
 export const POST = proxy;
 export const PUT = proxy;
 export const PATCH = proxy;

@@ -1,22 +1,10 @@
-import { WorkflowApiError } from "@/lib/workflow-api";
+import { request } from "./workflow-api";
 
 export type PlayerProfileInput = {
   playerName?: string;
   teamName?: string;
   shirtNumber?: number;
 };
-
-const API_PREFIX = "/api/backend";
-
-type JsonRecord = Record<string, unknown>;
-
-const asRecord = (value: unknown): JsonRecord =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : {};
-
-const asString = (value: unknown): string | null =>
-  typeof value === "string" && value.trim() ? value.trim() : null;
 
 export const savePlayerProfile = async (
   jobId: string,
@@ -29,8 +17,8 @@ export const savePlayerProfile = async (
     shirt_number: profile.shirtNumber ?? null
   };
 
-  const response = await fetch(
-    `${API_PREFIX}/jobs/${encodeURIComponent(jobId)}/player-profile`,
+  await request(
+    `/jobs/${encodeURIComponent(jobId)}/player-profile`,
     {
       method: "POST",
       cache: "no-store",
@@ -44,21 +32,4 @@ export const savePlayerProfile = async (
       body: JSON.stringify(payload)
     }
   );
-
-  if (!response.ok) {
-    const payload = asRecord(await response.json().catch(() => ({})));
-    const detail = asRecord(payload.detail);
-    const error = asRecord(payload.error ?? detail.error ?? detail);
-    throw new WorkflowApiError({
-      status: response.status,
-      code: asString(error.code) ?? "PLAYER_PROFILE_SAVE_FAILED",
-      message:
-        asString(error.message) ?? `Request failed (${response.status})`,
-      requestId:
-        asString(asRecord(payload.meta).request_id) ??
-        asString(payload.request_id) ??
-        response.headers.get("x-request-id"),
-      details: error.details ?? null
-    });
-  }
 };

@@ -24,6 +24,8 @@ export async function forward(
   { methodOverride, includeBody = true }: ForwardOptions = {}
 ) {
   const requestId = generateRequestId();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
   const targetHost = (() => {
     try {
       return new URL(targetUrl).host;
@@ -41,13 +43,16 @@ export async function forward(
 
     // IMPORTANT: non usare request.body (stream) su Vercel.
     // Bufferizza il body: stabile per JSON piccoli.
-    const bodyData = includeBody ? await request.clone().arrayBuffer() : undefined;
+    const method = methodOverride ?? request.method;
+    const sendBody = includeBody && method !== "GET" && method !== "HEAD";
+    const bodyData = sendBody ? await request.clone().arrayBuffer() : undefined;
 
     const upstreamResponse = await fetch(targetUrl, {
-      method: methodOverride ?? request.method,
+      method,
       headers,
-      body: bodyData && includeBody ? bodyData : undefined,
-      cache: "no-store"
+      body: bodyData?.byteLength ? bodyData : undefined,
+      cache: "no-store",
+      signal: controller.signal
     });
 
     console.info("[proxy] Upstream response", {
@@ -59,13 +64,17 @@ export async function forward(
     const resHeaders = new Headers();
     upstreamResponse.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
-      if (!HOP_BY_HOP.has(lowerKey)) {
+      // fetch decodes compressed upstream bodies; do not label them as gzip.
+      if (!HOP_BY_HOP.has(lowerKey) && lowerKey !== "content-encoding") {
         resHeaders.set(key, value);
       }
     });
-    resHeaders.set("x-request-id", requestId);
+    resHeaders.set("x-request-id", upstreamResponse.headers.get("x-request-id") ?? requestId);
+    resHeaders.set("cache-control", "no-store");
 
-    const responseBody = await upstreamResponse.arrayBuffer();
+    const responseBody = method === "HEAD" || [204, 205, 304].includes(upstreamResponse.status)
+      ? null
+      : await upstreamResponse.arrayBuffer();
     return new Response(responseBody, {
       status: upstreamResponse.status,
       headers: resHeaders
@@ -78,12 +87,14 @@ export async function forward(
       status: "fetch_failed"
     });
     return new Response(message, {
-      status: 502,
+      status: controller.signal.aborted ? 504 : 502,
       headers: {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",
         "x-request-id": requestId
       }
     });
+  } finally {
+    clearTimeout(timeout);
   }
 }
